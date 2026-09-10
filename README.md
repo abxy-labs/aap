@@ -8,6 +8,11 @@ Three properties hold throughout. Foil never presents an interface to a consumer
 
 - [docs/spec.md](docs/spec.md): the protocol specification, written for sites, operators, and agent applications. It covers the concepts, the trust chain, the lifecycle, per-role guides, the reference for scopes, endpoints, headers, and claims, and security considerations.
 - [docs/cli.md](docs/cli.md): the command line reference for `aap`, the reference implementation in this repository.
+- Integration guides, one per party:
+  - [Integrate a site](docs/guides/site.md), for an engineer at a site that runs Foil.
+  - [Integrate an operator](docs/guides/operator.md), for a company that runs browsers for agents.
+  - [Integrate an agent application](docs/guides/agent-app.md), for the product a consumer talks to.
+  - [Integrate an embedded provider](docs/guides/embedded-provider.md), for a component that runs inside other companies' flows.
 - [examples/lifecycle.sh](examples/lifecycle.sh): every command in order, from a fresh store to a bound session, a handoff, a replayed grant, and a revocation.
 
 ## Reference implementation
@@ -38,6 +43,7 @@ bun test
 ```
 docs/spec.md          the specification
 docs/cli.md           command reference
+docs/guides/          integration guides per party
 docs/images/          diagrams used by the specification
 src/cli.ts            command line entry point
 src/lib/              protocol objects, verification, and the local store
