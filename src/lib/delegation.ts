@@ -80,10 +80,12 @@ export async function createDelegation(store: Store, root: KeyFile, req: Delegat
       ...(req.acceptance.copies_sent_to ? { copies_sent_to: req.acceptance.copies_sent_to } : {}),
     },
     observed,
+    presented: null,
   };
   const claims: DelegationClaims = {
     iss: "foil",
     sub: dlId,
+    issuer: "foil",
     agent: req.agent.sub,
     operator: req.operator.sub,
     origin: req.origin,

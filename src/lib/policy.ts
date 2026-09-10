@@ -1,4 +1,4 @@
-import type { Constraints, DisclosureBundle, Evidence, PolicyClaims, Tier } from "../types.ts";
+import type { Constraints, CredentialPolicy, DisclosureBundle, Evidence, PolicyClaims, Tier } from "../types.ts";
 import { TYP, decode, nowSeconds, sign, verify } from "./jwt.ts";
 import type { KeyFile } from "./keys.ts";
 import { Store, type StoredPolicy } from "./store.ts";
@@ -16,6 +16,7 @@ export interface PolicyInput {
   handoff?: string[];
   maxAgeS?: number;
   disclose?: { operator: boolean; agent: boolean };
+  credentials?: CredentialPolicy | null;
   now?: Date;
 }
 
@@ -42,6 +43,7 @@ export async function setPolicy(store: Store, root: KeyFile, input: PolicyInput)
     handoff: input.handoff ?? [],
     max_age_s: input.maxAgeS ?? 30 * 86400,
     disclose: input.disclose ?? { operator: false, agent: false },
+    credentials: input.credentials ?? null,
     iat: nowSeconds(input.now),
   };
   const jwt = await sign(claims as never, root.private, TYP.policy);
