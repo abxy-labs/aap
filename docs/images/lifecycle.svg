@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 840 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Sequence of the protocol lifecycle">
+<style>
+  svg { font-family: Roboto, Helvetica, Arial, sans-serif; }
+  .lane { stroke: #DADCE0; stroke-width: 1; }
+  .box { fill: #F8F9FA; stroke: #5F6368; stroke-width: 1; }
+  .boxlbl { font-size: 13.5px; font-weight: 500; fill: #202124; }
+  .msg { stroke: #5F6368; stroke-width: 1; }
+  .mk { fill: #5F6368; }
+  .lbl { font-size: 12.5px; fill: #202124; paint-order: stroke; stroke: #FFFFFF; stroke-width: 6px; stroke-linejoin: round; }
+  .note { font-size: 11px; fill: #5F6368; paint-order: stroke; stroke: #FFFFFF; stroke-width: 5px; stroke-linejoin: round; }
+  .phase { stroke: #DADCE0; stroke-dasharray: 3 4; }
+  .phasebg { fill: #FFFFFF; }
+  .phaselbl { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; fill: #5F6368; font-weight: 500; }
+  .selfbox { fill: #F1F3F4; stroke: #DADCE0; }
+  .cbox { fill: #F8F9FA; stroke: #5F6368; }
+  .cbox.root { fill: #E8F0FE; stroke: #1A73E8; }
+  .ctitle { font-size: 13.5px; font-weight: 500; fill: #202124; }
+  .cline { font-size: 11.5px; fill: #3C4043; }
+  .clink { stroke: #5F6368; stroke-width: 1; }
+</style>
+<rect width="100%" height="100%" fill="#FFFFFF"/>
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="mk" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+<line class="lane" x1="100" y1="52" x2="100" y2="884"/>
+<line class="lane" x1="300" y1="52" x2="300" y2="884"/>
+<line class="lane" x1="520" y1="52" x2="520" y2="884"/>
+<line class="lane" x1="740" y1="52" x2="740" y2="884"/>
+<rect class="box" x="10" y="16" width="180" height="36" rx="4"/>
+<text class="boxlbl" x="100" y="39" text-anchor="middle">Consumer</text>
+<rect class="box" x="210" y="16" width="180" height="36" rx="4"/>
+<text class="boxlbl" x="300" y="39" text-anchor="middle">Agent app / operator</text>
+<rect class="box" x="430" y="16" width="180" height="36" rx="4"/>
+<text class="boxlbl" x="520" y="39" text-anchor="middle">Foil</text>
+<rect class="box" x="650" y="16" width="180" height="36" rx="4"/>
+<text class="boxlbl" x="740" y="39" text-anchor="middle">Site</text>
+<line class="phase" x1="10" y1="88" x2="830" y2="88"/>
+<rect class="phasebg" x="373" y="79" width="95" height="18"/>
+<text class="phaselbl" x="420.0" y="92" text-anchor="middle">Setup, once</text>
+<line class="msg" x1="300" y1="122" x2="518" y2="122" marker-end="url(#ah)"/>
+<text class="lbl" x="410.0" y="115" text-anchor="middle">Register as an operator</text>
+<text class="note" x="410.0" y="137" text-anchor="middle">Foil issues an operator certificate after vetting</text>
+<rect class="selfbox" x="140.0" y="156" width="320" height="44" rx="3"/>
+<text class="lbl" x="300" y="174" text-anchor="middle">Issue agent certificates under the operator certificate</text>
+<text class="note" x="300" y="192" text-anchor="middle">no call to Foil</text>
+<line class="msg" x1="740" y1="222" x2="522" y2="222" marker-end="url(#ah)"/>
+<text class="lbl" x="630.0" y="215" text-anchor="middle">Configure policy in the dashboard</text>
+<text class="note" x="630.0" y="237" text-anchor="middle">Foil signs a versioned policy statement</text>
+<line class="phase" x1="10" y1="266" x2="830" y2="266"/>
+<rect class="phasebg" x="247" y="257" width="346" height="18"/>
+<text class="phaselbl" x="420.0" y="270" text-anchor="middle">Delegation, once per consumer per agent per site</text>
+<line class="msg" x1="300" y1="300" x2="518" y2="300" marker-end="url(#ah)"/>
+<text class="lbl" x="410.0" y="293" text-anchor="middle">GET /v1/terms</text>
+<text class="note" x="410.0" y="315" text-anchor="middle">agent, origin, requested scopes</text>
+<line class="msg" x1="520" y1="346" x2="302" y2="346" marker-end="url(#ah)"/>
+<text class="lbl" x="410.0" y="339" text-anchor="middle">Scopes in plain language, constraints, disclosures</text>
+<line class="msg" x1="300" y1="392" x2="102" y2="392" marker-end="url(#ah)"/>
+<text class="lbl" x="200.0" y="385" text-anchor="middle">Present terms in the consumer's channel</text>
+<line class="msg" x1="100" y1="438" x2="298" y2="438" marker-end="url(#ah)"/>
+<text class="lbl" x="200.0" y="431" text-anchor="middle">Accept</text>
+<line class="msg" x1="300" y1="484" x2="518" y2="484" marker-end="url(#ah)"/>
+<text class="lbl" x="410.0" y="477" text-anchor="middle">POST /v1/delegations</text>
+<text class="note" x="410.0" y="499" text-anchor="middle">acceptance evidence and optional site session, signed with the agent key</text>
+<line class="msg" x1="520" y1="532" x2="302" y2="532" marker-end="url(#ah)"/>
+<text class="lbl" x="410.0" y="525" text-anchor="middle">Delegation certificate and record</text>
+<line class="phase" x1="10" y1="576" x2="830" y2="576"/>
+<rect class="phasebg" x="277" y="567" width="285" height="18"/>
+<text class="phaselbl" x="420.0" y="580" text-anchor="middle">Session, every session, no call to Foil</text>
+<line class="msg" x1="300" y1="610" x2="738" y2="610" marker-end="url(#ah)"/>
+<text class="lbl" x="520.0" y="603" text-anchor="middle">Browse</text>
+<text class="note" x="520.0" y="625" text-anchor="middle">nothing is added to requests to the site</text>
+<line class="msg" x1="300" y1="656" x2="518" y2="656" marker-end="url(#ah)"/>
+<text class="lbl" x="410.0" y="649" text-anchor="middle">SDK telemetry</text>
+<line class="msg" x1="520" y1="700" x2="302" y2="700" marker-end="url(#ah)"/>
+<text class="lbl" x="410.0" y="693" text-anchor="middle">Telemetry response with challenge</text>
+<text class="note" x="410.0" y="715" text-anchor="middle">only for origins whose policy admits agents</text>
+<line class="msg" x1="300" y1="746" x2="518" y2="746" marker-end="url(#ah)"/>
+<text class="lbl" x="410.0" y="739" text-anchor="middle">SDK telemetry with Foil-Agent-Grant header</text>
+<text class="note" x="410.0" y="761" text-anchor="middle">grant and chain, signed over the challenge</text>
+<rect class="selfbox" x="360.0" y="782" width="320" height="28" rx="3"/>
+<text class="lbl" x="520" y="800" text-anchor="middle">Verify chain, apply current policy, bind, keep scoring</text>
+<line class="msg" x1="520" y1="844" x2="302" y2="844" marker-end="url(#ah)"/>
+<text class="lbl" x="410.0" y="837" text-anchor="middle">Status on the telemetry response</text>
+<line class="msg" x1="740" y1="884" x2="522" y2="884" marker-end="url(#ah)"/>
+<text class="lbl" x="630.0" y="877" text-anchor="middle">GET /v1/sessions/{id}</text>
+<text class="note" x="630.0" y="899" text-anchor="middle">plane, scopes, constraints, delegation record</text>
+</svg>
