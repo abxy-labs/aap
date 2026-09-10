@@ -7,7 +7,45 @@ Three properties hold throughout. Foil never presents an interface to a consumer
 ## Contents
 
 - [docs/spec.md](docs/spec.md): the protocol specification, written for sites, operators, and agent applications. It covers the concepts, the trust chain, the lifecycle, per-role guides, the reference for scopes, endpoints, headers, and claims, and security considerations.
+- [docs/cli.md](docs/cli.md): the command line reference for `aap`, the reference implementation in this repository.
+- [examples/lifecycle.sh](examples/lifecycle.sh): every command in order, from a fresh store to a bound session, a handoff, a replayed grant, and a revocation.
+
+## Reference implementation
+
+`aap` implements every object in the specification and the rules for issuing and verifying them. It runs against a local store that plays the part of Foil, so one machine can act as Foil, an operator, an agent, and a site in turn. It requires [Bun](https://bun.sh).
+
+```
+bun install
+bun run src/cli.ts demo
+```
+
+The demo runs the whole lifecycle in a temporary store and prints each step. To run the commands yourself:
+
+```
+bun link
+aap init
+aap --help
+```
+
+Tests cover the lifecycle, every downgrade reason, and the issuance rules:
+
+```
+bun test
+```
+
+## Repository layout
+
+```
+docs/spec.md          the specification
+docs/cli.md           command reference
+docs/images/          diagrams used by the specification
+src/cli.ts            command line entry point
+src/lib/              protocol objects, verification, and the local store
+src/types.ts          claim shapes
+test/                 lifecycle and downgrade-reason tests
+examples/             shell walkthrough
+```
 
 ## Status
 
-This is a draft. Endpoint names, header names, and claim shapes are subject to change before release.
+This is a draft. Endpoint names, header names, and claim shapes are subject to change before release. The reference implementation does not run a network service, does not score sessions, and does not implement the planned edge challenge; see the last section of [docs/cli.md](docs/cli.md).
