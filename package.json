@@ -1,0 +1,19 @@
+{
+  "name": "aap",
+  "version": "0.1.0",
+  "description": "Reference implementation of the Agent Admission Protocol",
+  "type": "module",
+  "bin": { "aap": "./src/cli.ts" },
+  "scripts": {
+    "aap": "bun run src/cli.ts",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "jose": "^6.0.11"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.19",
+    "typescript": "^5.8.3"
+  }
+}
