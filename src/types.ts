@@ -64,7 +64,26 @@ export interface DisclosureBundle {
   retain: "copy_required" | "none";
 }
 
-export type Evidence = "asserted" | "observed" | "site";
+export type Evidence = "asserted" | "observed" | "presented" | "site";
+
+export type DelegationIssuer = "foil" | "site" | "consumer";
+
+export interface CredentialPolicy {
+  /** Accepted credential types, for example "mdl" or "eu-pid". */
+  types: string[];
+  /** Accepted issuers, as identifiers the verifier recognizes. */
+  issuers: string[];
+  /** Claims the site may request in a presentation. */
+  claims: string[];
+}
+
+export interface PresentedEvidence {
+  type: string;
+  issuer: string;
+  holder_bound: boolean;
+  claims: Record<string, unknown>;
+  verified_at: string;
+}
 
 export interface PolicyClaims {
   iss: "foil";
@@ -78,6 +97,8 @@ export interface PolicyClaims {
   handoff: string[];
   max_age_s: number;
   disclose: { operator: boolean; agent: boolean };
+  /** Reserved for verifiable credential presentations. Null until a site configures it. */
+  credentials: CredentialPolicy | null;
   iat: number;
 }
 
@@ -119,11 +140,15 @@ export interface DelegationRecord {
     copies_sent_to?: string;
   };
   observed: ObservedEvidence | null;
+  /** Reserved for verifiable credential presentations. Null until one is recorded. */
+  presented: PresentedEvidence | null;
 }
 
 export interface DelegationClaims {
   iss: "foil";
   sub: string;
+  /** Who issued the delegation. Foil in the current version; a site or the consumer later. */
+  issuer: DelegationIssuer;
   agent: string;
   operator: string;
   origin: string;
@@ -181,12 +206,14 @@ export interface AgentBlock {
   constraints: Constraints;
   delegation: {
     id: string;
+    issuer: DelegationIssuer;
     policy_version: number;
     created_at: string;
     expires_at: string;
     record: string;
     asserted: { terms: string; acknowledged: string[]; channel: string };
     observed: ObservedEvidence | null;
+    presented: PresentedEvidence | null;
   };
   handoff: string | null;
 }

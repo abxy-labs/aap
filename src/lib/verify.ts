@@ -108,6 +108,9 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
     if (required === "observed" && !delegation.record.observed) {
       throw new Downgrade("evidence_insufficient", `${top} tier requires an observed session link and the delegation has only asserted evidence`);
     }
+    if (required === "presented" && !delegation.record.presented) {
+      throw new Downgrade("evidence_insufficient", `${top} tier requires a presented credential and the delegation has none`);
+    }
 
     // Replay
     const bound = await store.getGrantBinding(grant.jti);
@@ -143,6 +146,7 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
       constraints,
       delegation: {
         id: delegation.sub,
+        issuer: delegation.issuer ?? "foil",
         policy_version: delegation.policy_version,
         created_at: iso(delegation.iat),
         expires_at: iso(delegation.exp),
@@ -153,6 +157,7 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
           channel: delegation.record.asserted.channel,
         },
         observed: delegation.record.observed,
+        presented: delegation.record.presented ?? null,
       },
       handoff: null,
     };

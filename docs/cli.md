@@ -82,10 +82,10 @@ aap policy set --origin O --tier observe|read|manage|transact|none
                [--allow-operators a,b|any] [--allow-agents a,b|any] [--deny-agents a,b]
                [--max-amount N] [--max-total N] [--currency USD] [--max-count N] [--payees existing_only|any]
                [--disclosures FILE] [--evidence read=asserted,transact=observed] [--handoff s1,s2]
-               [--max-age-days N] [--disclose operator,agent]
+               [--max-age-days N] [--disclose operator,agent] [--credentials FILE]
 ```
 
-Configures the site's policy and signs it as a versioned statement. Each call increments the version. The tier is the highest tier any agent may reach; `none` closes the origin, after which no challenges are issued for it. `--evidence` states, per tier, whether an asserted acceptance is sufficient, whether an observed link to a live session at the site is required, or whether the step must happen on the site. `--handoff` names scopes the consumer must complete on the site regardless of tier. `--disclose` controls whether the operator and agent names appear in the site's verification response.
+Configures the site's policy and signs it as a versioned statement. Each call increments the version. The tier is the highest tier any agent may reach; `none` closes the origin, after which no challenges are issued for it. `--evidence` states, per tier, whether an asserted acceptance is sufficient, whether an observed link to a live session at the site is required, whether a presented credential is required, or whether the step must happen on the site. The `presented` level is reserved: no command can record a presentation yet, so a tier that requires it is refused with `evidence_insufficient` until that exists. `--handoff` names scopes the consumer must complete on the site regardless of tier. `--disclose` controls whether the operator and agent names appear in the site's verification response.
 
 `--disclosures FILE` is a JSON disclosure bundle:
 
@@ -106,6 +106,12 @@ Configures the site's policy and signs it as a versioned statement. Each call in
 ```
 
 `presentation: site` marks a bundle that cannot be accepted in an application. `render: full` requires the document to have been viewed before acceptance. `retain: copy_required` requires the acceptance to state where a copy was delivered. The placeholders `{agent}` and `{days}` are substituted when terms are computed.
+
+`--credentials FILE` is a JSON object naming the credential types and issuers the site accepts and the claims it may request in a presentation. It is stored on the policy and has no effect on verification in the current version.
+
+```json
+{ "types": ["mdl"], "issuers": ["dmv.ca.gov"], "claims": ["age_over_18"] }
+```
 
 ### aap policy show
 
@@ -146,7 +152,7 @@ The equivalent of `POST /v1/delegations`, with both sides performed locally. The
 }
 ```
 
-The command refuses an acceptance whose `terms` does not match the current ETag, that is missing an acknowledgement, that has not viewed a document marked for full rendering, that omits `copies_sent_to` when a copy is required, or that references a bundle marked for completion on the site. `--subject` is the operator's own stable identifier for the end user. `--site-session` names a consumer session at the site that Foil has seen; when given, the record carries observed evidence. The output includes the delegation id, the effective scopes and constraints, the record, and the certificate.
+The command refuses an acceptance whose `terms` does not match the current ETag, that is missing an acknowledgement, that has not viewed a document marked for full rendering, that omits `copies_sent_to` when a copy is required, or that references a bundle marked for completion on the site. `--subject` is the operator's own stable identifier for the end user. `--site-session` names a consumer session at the site that Foil has seen; when given, the record carries observed evidence. The output includes the delegation id, the effective scopes and constraints, the record, and the certificate. The certificate carries `issuer: "foil"`, and the record carries a `presented` field that is null; both are reserved for site-issued and consumer-issued delegations and for verifiable credential presentations.
 
 ### aap delegation show
 
@@ -210,7 +216,7 @@ Foil's verification at bind. Resolves the chain, verifies each signature against
 
 The response includes `narrowed` when the site's current policy is tighter than it was when the delegation was created, and `handoff_scopes` for granted scopes that the consumer will have to complete on the site.
 
-Downgrade reasons are `chain_invalid`, `challenge_invalid`, `delegation_revoked`, `delegation_expired`, `policy_denied`, `grant_replayed`, `operator_mismatch`, and `evidence_insufficient`. A replayed grant downgrades both the presenting session and the session that first bound it.
+Downgrade reasons are `chain_invalid`, `challenge_invalid`, `delegation_revoked`, `delegation_expired`, `policy_denied`, `grant_replayed`, `operator_mismatch`, and `evidence_insufficient`. The last is returned when the tier in use requires observed or presented evidence and the delegation record does not carry it. A replayed grant downgrades both the presenting session and the session that first bound it.
 
 ### aap session use
 

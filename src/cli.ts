@@ -13,7 +13,7 @@ import { Store } from "./lib/store.ts";
 import { computeTerms } from "./lib/terms.ts";
 import { verifyPresentation } from "./lib/verify.ts";
 import { runDemo } from "./lib/demo.ts";
-import type { Acceptance, Constraints, DisclosureBundle, Evidence, Tier } from "./types.ts";
+import type { Acceptance, Constraints, CredentialPolicy, DisclosureBundle, Evidence, Tier } from "./types.ts";
 
 const HELP = `aap - Agent Admission Protocol reference implementation
 
@@ -59,7 +59,7 @@ Run "aap <command> --help" for the options of one command.`;
 const COMMAND_HELP: Record<string, string> = {
   "operator issue": `aap operator issue --id ID --key PUBLIC_KEY_FILE --vetting LEVEL --session-handling TEXT [--asn A,B] [--ja4 X,Y] [--days N] --out FILE`,
   "agent issue": `aap agent issue --operator-cert FILE --operator-key FILE --id ID --name NAME --key PUBLIC_KEY_FILE --scopes a,b [--max-amount N] [--max-total N] [--currency USD] [--max-count N] [--payees existing_only|any] [--days N] --out FILE`,
-  "policy set": `aap policy set --origin O --tier observe|read|manage|transact|none [--allow-operators a,b|any] [--allow-agents a,b|any] [--deny-agents a,b] [--max-amount N] [--max-total N] [--currency USD] [--max-count N] [--payees existing_only|any] [--disclosures FILE] [--evidence read=asserted,transact=observed] [--handoff s1,s2] [--max-age-days N] [--disclose operator,agent]`,
+  "policy set": `aap policy set --origin O --tier observe|read|manage|transact|none [--allow-operators a,b|any] [--allow-agents a,b|any] [--deny-agents a,b] [--max-amount N] [--max-total N] [--currency USD] [--max-count N] [--payees existing_only|any] [--disclosures FILE] [--credentials FILE] [--evidence read=asserted,transact=observed] [--handoff s1,s2] [--max-age-days N] [--disclose operator,agent]`,
   "delegation create": `aap delegation create --agent-cert FILE --operator-cert FILE --agent-key FILE --origin O --subject S --scopes a,b --intent TEXT --acceptance FILE [--site-session ID] --out FILE`,
   "grant sign": `aap grant sign --agent-key FILE --agent-cert FILE --delegation FILE --session-ref REF --intent TEXT [--scopes a,b] --challenge JWT|FILE [--ttl-s N] --out FILE`,
   verify: `aap verify (--header VALUE | --header-file FILE) --origin O --session ID [--asn A] [--ja4 J]`,
@@ -149,10 +149,13 @@ async function main(argv: string[]): Promise<number> {
       if (sub !== "set") throw new UsageError("usage: aap policy set|show --origin O ...");
       const disclosuresPath = str(flags, "disclosures");
       const disclosures = disclosuresPath ? ((await Bun.file(disclosuresPath).json()) as DisclosureBundle) : null;
+      const credentialsPath = str(flags, "credentials");
+      const credentials = credentialsPath ? ((await Bun.file(credentialsPath).json()) as CredentialPolicy) : null;
       const evidence: Partial<Record<Tier, Evidence>> = {};
+      const levels = ["asserted", "observed", "presented", "site"];
       for (const pair of list(flags, "evidence") ?? []) {
         const [t, e] = pair.split("=");
-        if (!t || !e) throw new UsageError(`--evidence entries look like tier=asserted|observed|site (got ${pair})`);
+        if (!t || !e || !levels.includes(e)) throw new UsageError(`--evidence entries look like tier=asserted|observed|presented|site (got ${pair})`);
         evidence[t as Tier] = e as Evidence;
       }
       const disclose = list(flags, "disclose") ?? [];
@@ -171,6 +174,7 @@ async function main(argv: string[]): Promise<number> {
         handoff: list(flags, "handoff") ?? [],
         ...(maxAgeDays !== undefined ? { maxAgeS: maxAgeDays * 86400 } : {}),
         disclose: { operator: disclose.includes("operator"), agent: disclose.includes("agent") },
+        credentials,
       });
       out({ origin: stored.origin, version: stored.version, policy: stored.jwt });
       return 0;
