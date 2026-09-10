@@ -1,5 +1,5 @@
 import type { JWK } from "jose";
-import type { AgentClaims, Ceiling, OperatorClaims, OperatorProfile } from "../types.ts";
+import type { AgentClaims, Attestation, Ceiling, OperatorClaims, OperatorProfile } from "../types.ts";
 import { TYP, nowSeconds, sign, verify } from "./jwt.ts";
 import type { KeyFile } from "./keys.ts";
 import { validate } from "./scopes.ts";
@@ -8,7 +8,7 @@ const DAY = 86400;
 
 export async function issueOperator(
   root: KeyFile,
-  input: { id: string; key: JWK; vetting: string; sessionHandling: string; profile?: OperatorProfile; days?: number; now?: Date },
+  input: { id: string; key: JWK; vetting: string; sessionHandling: string; attestations?: Attestation[]; profile?: OperatorProfile; days?: number; now?: Date },
 ): Promise<string> {
   const iat = nowSeconds(input.now);
   const claims: OperatorClaims = {
@@ -17,6 +17,7 @@ export async function issueOperator(
     key: input.key,
     vetting: input.vetting,
     session_handling: input.sessionHandling,
+    attestations: input.attestations ?? [],
     ...(input.profile ? { profile: input.profile } : {}),
     iat,
     nbf: iat,

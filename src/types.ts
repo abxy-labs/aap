@@ -23,12 +23,23 @@ export interface OperatorProfile {
   ja4?: string[];
 }
 
+/** A credential about the operator issued by a third party, such as a card network's Know-Your-Agent credential. */
+export interface Attestation {
+  type: string;
+  issuer: string;
+  ref?: string;
+  credential?: string;
+  issued_at?: string;
+  expires_at?: string;
+}
+
 export interface OperatorClaims {
   iss: "foil";
   sub: string;
   key: JsonWebKey;
   vetting: string;
   session_handling: string;
+  attestations: Attestation[];
   profile?: OperatorProfile;
   iat: number;
   nbf: number;

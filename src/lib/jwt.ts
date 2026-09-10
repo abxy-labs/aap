@@ -1,5 +1,5 @@
 import { SignJWT, decodeJwt, decodeProtectedHeader, jwtVerify, type JWK, type JWTPayload } from "jose";
-import { ALG, importPrivate, importPublic } from "./keys.ts";
+import { ALGS, algOf, importPrivate, importPublic } from "./keys.ts";
 
 export const TYP = {
   operator: "aap-operator+jwt",
@@ -15,7 +15,7 @@ export type Typ = (typeof TYP)[keyof typeof TYP];
 
 export async function sign(claims: JWTPayload, key: JWK, typ: Typ): Promise<string> {
   const k = await importPrivate(key);
-  return new SignJWT(claims).setProtectedHeader({ alg: ALG, typ, kid: key.kid }).sign(k);
+  return new SignJWT(claims).setProtectedHeader({ alg: algOf(key), typ, kid: key.kid }).sign(k);
 }
 
 export interface Verified<T> {
@@ -26,7 +26,7 @@ export interface Verified<T> {
 export async function verify<T>(jwt: string, key: JWK | CryptoKey, typ: Typ, opts: { now?: Date } = {}): Promise<Verified<T>> {
   const k = "kty" in (key as JWK) ? await importPublic(key as JWK) : (key as CryptoKey);
   const { payload, protectedHeader } = await jwtVerify(jwt, k, {
-    algorithms: [ALG],
+    algorithms: ALGS,
     typ,
     currentDate: opts.now,
   });

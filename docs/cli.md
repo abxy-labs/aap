@@ -27,7 +27,7 @@ To install the command on your path, run `bun link` in the repository, after whi
 | Grant | Agent | `grant sign` | Bound under `grants/` at verification |
 | Session | Foil | `verify` | `sessions/` |
 
-All signed objects are compact JSON Web Signatures using ES256, with a `typ` header naming the object type, for example `aap-delegation+jwt`. `aap inspect` decodes any of them without verifying.
+All signed objects are compact JSON Web Signatures using ES256 or EdDSA, with a `typ` header naming the object type, for example `aap-delegation+jwt`. `aap inspect` decodes any of them without verifying.
 
 ## Store
 
@@ -52,18 +52,18 @@ Prints the SHA-256 hash of every origin whose current policy admits agents. This
 ### aap keygen
 
 ```
-aap keygen --out FILE
+aap keygen --out FILE [--alg ES256|EdDSA]
 ```
 
-Generates an ES256 key pair and writes it as a JSON file containing `kid`, `public`, and `private`. The same file serves as either a public key input, from which only the public half is read, or a private key input.
+Generates a key pair and writes it as a JSON file containing `kid`, `alg`, `public`, and `private`. ES256 keys are EC P-256. EdDSA keys are Ed25519, the key type Web Bot Auth uses, so an operator that already has such a key can use it as an operator or agent key; a bare private JWK file is accepted anywhere a key file is, with the algorithm inferred from the key. The same file serves as either a public key input, from which only the public half is read, or a private key input.
 
 ### aap operator issue
 
 ```
-aap operator issue --id ID --key PUBLIC_KEY_FILE --vetting LEVEL --session-handling TEXT [--asn A,B] [--ja4 X,Y] [--days N] --out FILE
+aap operator issue --id ID --key PUBLIC_KEY_FILE --vetting LEVEL --session-handling TEXT [--attestations FILE] [--asn A,B] [--ja4 X,Y] [--days N] --out FILE
 ```
 
-Foil's side of vetting. Issues an operator certificate under the root key with the operator's public key, its vetting level, and a statement about how it handles transferred sessions. `--asn` and `--ja4` record the operator's known network and TLS profile; when present, `aap verify` compares them with the presenting session and returns `operator_mismatch` on a difference. The certificate is valid for 365 days by default and is also recorded in the store so that later presentations can omit it.
+Foil's side of vetting. Issues an operator certificate under the root key with the operator's public key, its vetting level, and a statement about how it handles transferred sessions. `--attestations FILE` is a JSON array of third-party credentials about the operator, each with a `type` and an `issuer` and optionally a `ref`, a `credential`, and validity dates; a Know-Your-Agent credential from a card network is the expected use. `--asn` and `--ja4` record the operator's known network and TLS profile; when present, `aap verify` compares them with the presenting session and returns `operator_mismatch` on a difference. The certificate is valid for 365 days by default and is also recorded in the store so that later presentations can omit it.
 
 ### aap agent issue
 

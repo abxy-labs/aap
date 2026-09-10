@@ -46,7 +46,7 @@ The protocol is built from five signed objects. Each is issued by the party that
 
 | Object | Issued by | States |
 | --- | --- | --- |
-| Operator certificate | Foil, after vetting | The operator's identity and public key, its vetting level, and how it handles transferred sessions. |
+| Operator certificate | Foil, after vetting | The operator's identity and public key, its vetting level, how it handles transferred sessions, and any attestations about it issued by third parties. |
 | Agent certificate | The operator | A named agent's public key and the most it may ever do: a scope ceiling and a constraint ceiling. |
 | Policy statement | Foil, from the site's dashboard configuration | Which operators and agents the site admits, the highest tier they may reach, constraints, disclosure bundles, and which delegation issuers each tier accepts. |
 | Delegation certificate | Foil in the current version; a site or the consumer in later versions, recorded in the certificate's `issuer` field | That a specific consumer authorized a specific agent at a specific site, with scopes equal to the intersection of the agent's ceiling, the site's policy, and what the consumer accepted, together with the acceptance record. |
@@ -135,6 +135,21 @@ Web Bot Auth is the appropriate mechanism for a crawler, a fetcher, or an API cl
 The two mechanisms are compatible, and an operator can support both with one key. The agent key in an agent certificate can produce Web Bot Auth signatures. An operator that supports both signs requests to origins that verify Web Bot Auth at their edge and presents its chain to Foil at sites that run Foil. Because a Web Bot Auth signature is visible to the origin, an operator would sign only for origins it has chosen to identify itself to, and the Foil directory of participating origins can serve as that list for sites that have opted in. The planned edge challenge uses the same HTTP Message Signatures format as Web Bot Auth, with the difference that the signature is produced in answer to a challenge rather than on every request.
 
 
+## Relationship to other work
+
+Several protocols and frameworks address agents, and the protocol is designed to consume their results rather than replace them. The following states the position for each.
+
+| Work | What it provides | How the protocol uses it |
+| --- | --- | --- |
+| Web Bot Auth | Cryptographic identity of an automated client, presented on each request | The identity link. The same Ed25519 key can be an operator or agent key, agent keys may be published in its key directory, and the planned edge challenge answers in its signature format. |
+| Card network agent credentials, including Know-Your-Agent frameworks | Vetting of an agent or operator for payment transactions, recognized across networks | An attestation on the operator certificate, recorded by type, issuer, and reference. Foil vets once and carries the network's credential as evidence. |
+| Payment mandates, such as those in the Agent Payments Protocol | A user-signed authorization for a specific payment | The shape of a consumer-signed delegation. A delegation with money-movement scopes can carry or reference a mandate. |
+| Model Context Protocol and Agent2Agent | Tool and agent interfaces for the API surface | Surfaces that consume the same scope vocabulary. A site's server can accept the delegation as the credential its tools require. |
+| WebMCP | Tools a page exposes to an agent in the browser | The action layer once a session is admitted. Tools can be annotated with scopes so that the SDK exposes only those the session's grant permits. |
+| OpenID Connect and AuthZEN work on agent identity and authorization | Identity tokens and policy decisions for agents inside an organization's identity provider | Complementary. An enterprise agent's identity token can be the subject an operator supplies, and a policy decision point can consume the verification response. |
+
+None of these provides a site's policy over a browser session, a credential paired with detection, a consent record that includes the site's disclosures, or evidence that a transferred session was authorized. Those remain the protocol's own.
+
 ## Guide for sites
 
 
@@ -217,7 +232,9 @@ The delegation record is available in full, signed by Foil, from the delegations
 
 ### Register
 
-Registration is a vetting process rather than an API call. Foil issues an operator certificate that contains your operator id, your public key, your vetting level, and an attestation about how you handle transferred sessions. The certificate is valid for one year and is renewed through the same process.
+Registration is a vetting process rather than an API call. Foil issues an operator certificate that contains your operator id, your public key, your vetting level, a statement about how you handle transferred sessions, and a list of attestations about you issued by third parties, such as a Know-Your-Agent credential from a card network, each recorded by type, issuer, and reference. The certificate is valid for one year and is renewed through the same process.
+
+Keys are EC P-256, signing with ES256, or Ed25519, signing with EdDSA. Ed25519 is the key type Web Bot Auth uses, so an operator that already signs requests under that scheme can use the same key here, and may publish its agent keys in a Web Bot Auth style key directory.
 
 
 ### Issue agent certificates
@@ -448,7 +465,7 @@ The delegation lasts for its maximum age, so a consumer accepts once for each ag
 
 ## Planned: edge challenge
 
-The current version presents the grant on the SDK's telemetry channel, which requires that the SDK be running on a page. A planned extension lets a site's edge issue the same challenge on HTTP responses, so that an agent can present its chain on the request that follows, before any page loads, and so that requests without a page, such as API calls, can be covered. The challenge and the presentation are the same objects; only the channel differs. The edge verifies the chain, removes the presentation, and forwards the request to the origin with the plane and scopes. Because the edge has network-level evidence but not yet behavioral evidence, its verdict is provisional until the SDK binds, and the verification response will state which of the two a site is reading.
+The current version presents the grant on the SDK's telemetry channel, which requires that the SDK be running on a page. A planned extension lets a site's edge issue the same challenge on HTTP responses, so that an agent can present its chain on the request that follows, before any page loads, and so that requests without a page, such as API calls, can be covered. The challenge and the presentation are the same objects; only the channel differs. On the edge channel the answer is an HTTP Message Signature over the request with the challenge as a covered component, which is the format Web Bot Auth uses, with the grant and chain carried in the same header as on the telemetry channel. An operator that has implemented Web Bot Auth signing reuses it and changes only when it signs. The edge verifies the chain, removes the presentation, and forwards the request to the origin with the plane and scopes. Because the edge has network-level evidence but not yet behavioral evidence, its verdict is provisional until the SDK binds, and the verification response will state which of the two a site is reading.
 
 
 ## Planned: verifiable credentials
@@ -457,7 +474,7 @@ A verifiable credential is a statement about a person, signed by an issuer such 
 
 First, a presentation is a third kind of evidence in the delegation record, called presented, alongside asserted and observed. A site can require it per tier in the same setting it uses for the other two. It is the evidence that fits onboarding, where there is no prior session to observe and no account to sign in to.
 
-Second, the consumer can be the delegation's issuer. The acceptance, with its terms version, acknowledgements, scopes, and expiry, becomes a request the consumer's wallet signs, and the delegation is consumer-signed and Foil-countersigned for the observed facts. The delegation certificate's `issuer` field records this, and is `foil` today.
+Second, the consumer can be the delegation's issuer. The acceptance, with its terms version, acknowledgements, scopes, and expiry, becomes a request the consumer's wallet signs, and the delegation is consumer-signed and Foil-countersigned for the observed facts. The delegation certificate's `issuer` field records this, and is `foil` today. A consumer-signed delegation has the same shape as a payment mandate: a subject, a counterparty, limits, and an expiry, signed by the person's own key. A delegation whose scopes include money movement can carry or reference a payment mandate issued under a payment protocol, so that the site's authorization and the network's authorization describe the same act.
 
 Third, the delegation's subject can be a credential-bound identifier for the site, or selectively disclosed claims the site's policy requests, encrypted to the verifier. The policy's `credentials` field names the accepted credential types and issuers and the claims that may be requested.
 
