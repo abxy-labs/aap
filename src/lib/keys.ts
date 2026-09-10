@@ -1,19 +1,29 @@
 import { calculateJwkThumbprint, exportJWK, generateKeyPair, importJWK, type JWK } from "jose";
 
-export const ALG = "ES256";
+export type Alg = "ES256" | "EdDSA";
+export const ALGS: Alg[] = ["ES256", "EdDSA"];
 
 export interface KeyFile {
   kid: string;
+  alg: Alg;
   public: JWK;
   private: JWK;
 }
 
-export async function generateKeyFile(): Promise<KeyFile> {
-  const { publicKey, privateKey } = await generateKeyPair(ALG, { extractable: true });
+/** The algorithm a JWK is used with. EC P-256 keys sign ES256; Ed25519 keys sign EdDSA, the algorithm Web Bot Auth uses. */
+export function algOf(jwk: JWK): Alg {
+  if (jwk.kty === "EC" && jwk.crv === "P-256") return "ES256";
+  if (jwk.kty === "OKP" && jwk.crv === "Ed25519") return "EdDSA";
+  throw new Error(`unsupported key type ${jwk.kty}/${jwk.crv ?? ""}; use EC P-256 or Ed25519`);
+}
+
+export async function generateKeyFile(alg: Alg = "ES256"): Promise<KeyFile> {
+  if (!ALGS.includes(alg)) throw new Error(`unsupported algorithm ${alg}; use ES256 or EdDSA`);
+  const { publicKey, privateKey } = await generateKeyPair(alg, { extractable: true });
   const pub = await exportJWK(publicKey);
   const priv = await exportJWK(privateKey);
   const kid = await calculateJwkThumbprint(pub);
-  return { kid, public: { ...pub, kid }, private: { ...priv, kid } };
+  return { kid, alg, public: { ...pub, kid }, private: { ...priv, kid } };
 }
 
 export async function thumbprint(jwk: JWK): Promise<string> {
@@ -22,12 +32,12 @@ export async function thumbprint(jwk: JWK): Promise<string> {
 }
 
 export async function importPrivate(jwk: JWK): Promise<CryptoKey> {
-  return (await importJWK(jwk, ALG)) as CryptoKey;
+  return (await importJWK(jwk, algOf(jwk))) as CryptoKey;
 }
 
 export async function importPublic(jwk: JWK): Promise<CryptoKey> {
   const { d: _d, ...pub } = jwk;
-  return (await importJWK(pub, ALG)) as CryptoKey;
+  return (await importJWK(pub, algOf(pub))) as CryptoKey;
 }
 
 export function publicOnly(jwk: JWK): JWK {
@@ -37,10 +47,10 @@ export function publicOnly(jwk: JWK): JWK {
 
 export async function readKeyFile(path: string): Promise<KeyFile> {
   const raw = await Bun.file(path).json();
-  if (raw.private && raw.public) return raw as KeyFile;
+  if (raw.private && raw.public) return { alg: algOf(raw.public), ...raw } as KeyFile;
   if (raw.kty) {
     const kid = raw.kid ?? (await thumbprint(raw));
-    return { kid, public: publicOnly(raw), private: raw };
+    return { kid, alg: algOf(raw), public: publicOnly(raw), private: raw };
   }
   throw new Error(`${path} is not a key file`);
 }

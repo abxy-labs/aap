@@ -6,14 +6,14 @@ import { createDelegation, revokeDelegation, signRequest, verifyDelegation, veri
 import { directory } from "./lib/directory.ts";
 import { buildHeader, signGrant } from "./lib/grant.ts";
 import { decode } from "./lib/jwt.ts";
-import { generateKeyFile, readKeyFile, readPublicJwk } from "./lib/keys.ts";
+import { ALGS, generateKeyFile, readKeyFile, readPublicJwk, type Alg } from "./lib/keys.ts";
 import { loadPolicy, setPolicy } from "./lib/policy.ts";
 import { completeHandoff, useScope, verifyResponse } from "./lib/session.ts";
 import { Store } from "./lib/store.ts";
 import { computeTerms } from "./lib/terms.ts";
 import { verifyPresentation } from "./lib/verify.ts";
 import { runDemo } from "./lib/demo.ts";
-import type { Acceptance, Constraints, CredentialPolicy, DisclosureBundle, Evidence, Tier } from "./types.ts";
+import type { Acceptance, Attestation, Constraints, CredentialPolicy, DisclosureBundle, Evidence, Tier } from "./types.ts";
 
 const HELP = `aap - Agent Admission Protocol reference implementation
 
@@ -25,7 +25,7 @@ Store (simulated Foil)
   directory                               Hashed list of origins whose policy admits agents
 
 Keys and certificates
-  keygen --out FILE                       Generate an ES256 key pair
+  keygen --out FILE [--alg ES256|EdDSA]   Generate a key pair. EdDSA keys are the kind Web Bot Auth uses
   operator issue ...                      Foil issues an operator certificate
   agent issue ...                         An operator issues an agent certificate
 
@@ -57,7 +57,8 @@ Other
 Run "aap <command> --help" for the options of one command.`;
 
 const COMMAND_HELP: Record<string, string> = {
-  "operator issue": `aap operator issue --id ID --key PUBLIC_KEY_FILE --vetting LEVEL --session-handling TEXT [--asn A,B] [--ja4 X,Y] [--days N] --out FILE`,
+  "operator issue": `aap operator issue --id ID --key PUBLIC_KEY_FILE --vetting LEVEL --session-handling TEXT [--attestations FILE] [--asn A,B] [--ja4 X,Y] [--days N] --out FILE`,
+  keygen: `aap keygen --out FILE [--alg ES256|EdDSA]`,
   "agent issue": `aap agent issue --operator-cert FILE --operator-key FILE --id ID --name NAME --key PUBLIC_KEY_FILE --scopes a,b [--max-amount N] [--max-total N] [--currency USD] [--max-count N] [--payees existing_only|any] [--days N] --out FILE`,
   "policy set": `aap policy set --origin O --tier observe|read|manage|transact|none [--allow-operators a,b|any] [--allow-agents a,b|any] [--deny-agents a,b] [--max-amount N] [--max-total N] [--currency USD] [--max-count N] [--payees existing_only|any] [--disclosures FILE] [--credentials FILE] [--evidence read=asserted,transact=observed] [--handoff s1,s2] [--max-age-days N] [--disclose operator,agent]`,
   "delegation create": `aap delegation create --agent-cert FILE --operator-cert FILE --agent-key FILE --origin O --subject S --scopes a,b --intent TEXT --acceptance FILE [--site-session ID] --out FILE`,
@@ -95,10 +96,12 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case "keygen": {
-      const kf = await generateKeyFile();
+      const alg = (str(flags, "alg") ?? "ES256") as Alg;
+      if (!ALGS.includes(alg)) throw new UsageError("--alg must be ES256 or EdDSA");
+      const kf = await generateKeyFile(alg);
       const path = str(flags, "out", true)!;
       await Bun.write(path, JSON.stringify(kf, null, 2));
-      out({ out: path, kid: kf.kid, public: kf.public });
+      out({ out: path, kid: kf.kid, alg: kf.alg, public: kf.public });
       return 0;
     }
     case "operator": {
@@ -107,11 +110,15 @@ async function main(argv: string[]): Promise<number> {
       const key = await readPublicJwk(str(flags, "key", true)!);
       const asn = list(flags, "asn");
       const ja4 = list(flags, "ja4");
+      const attPath = str(flags, "attestations");
+      const attestations = attPath ? ((await Bun.file(attPath).json()) as Attestation[]) : [];
+      if (!Array.isArray(attestations) || attestations.some((a) => !a.type || !a.issuer)) throw new UsageError("--attestations must be a JSON array of objects with type and issuer");
       const jwt = await issueOperator(root, {
         id: str(flags, "id", true)!,
         key,
         vetting: str(flags, "vetting") ?? "standard",
         sessionHandling: str(flags, "session-handling") ?? "unspecified",
+        attestations,
         ...(asn || ja4 ? { profile: { ...(asn ? { asn } : {}), ...(ja4 ? { ja4 } : {}) } } : {}),
         days: num(flags, "days"),
       });

@@ -26,7 +26,9 @@ You need the following in place.
 
 ## Step 1: Register
 
-Registration is a vetting process rather than an API call. You provide your operator public key, a statement about how you handle sessions that were transferred from a consumer's device, and optionally your network profile: the autonomous system numbers your browsers egress from and the TLS fingerprints they present. Foil issues an operator certificate that contains your operator id, your public key, your vetting level, and the session-handling attestation. It is valid for one year and is renewed through the same process.
+Registration is a vetting process rather than an API call. You provide your operator public key, a statement about how you handle sessions that were transferred from a consumer's device, any third-party credentials about you that you want carried, such as a Know-Your-Agent credential from a card network, and optionally your network profile: the autonomous system numbers your browsers egress from and the TLS fingerprints they present. Foil issues an operator certificate that contains your operator id, your public key, your vetting level, the session-handling statement, and the attestations by type, issuer, and reference. It is valid for one year and is renewed through the same process.
+
+If you already sign requests under Web Bot Auth, the Ed25519 key you use for that can be your operator key or an agent key here; the protocol accepts Ed25519 and EC P-256 keys. Sites see your attestations only if they enable operator disclosure, and Foil does not re-verify a network's credential; it records that you presented it and who issued it.
 
 Store the operator private key in your control plane. It signs agent certificates and nothing else.
 

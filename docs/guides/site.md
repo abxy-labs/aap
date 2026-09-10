@@ -108,6 +108,7 @@ For each tier, choose what evidence a delegation must carry before a session may
 | --- | --- | --- |
 | `asserted` | The application's signed statement that the consumer accepted is sufficient | Read tier |
 | `observed` | Foil must hold an observed link to a live session for the same consumer at your site | Manage and transact |
+| `presented` | The delegation must carry a verified credential presentation from the consumer. Reserved; no presentation can be recorded in the current version | Onboarding, once available |
 | `site` | The step must be completed on your site by the consumer | Anything you would not delegate to an application |
 
 Handoff scopes are scopes the consumer must complete on your site regardless of tier. Marking `payments:initiate` for handoff means an agent can prepare a payment and the consumer confirms it on your site, where your existing step-up controls apply. This is the usual configuration for a first transact deployment.

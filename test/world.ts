@@ -4,7 +4,7 @@ import { issueAgent, issueOperator, verifyAgent, verifyOperator } from "../src/l
 import { issueChallenge, verifyChallenge } from "../src/lib/challenge.ts";
 import { createDelegation } from "../src/lib/delegation.ts";
 import { buildHeader, signGrant } from "../src/lib/grant.ts";
-import { generateKeyFile, type KeyFile } from "../src/lib/keys.ts";
+import { generateKeyFile, type Alg, type KeyFile } from "../src/lib/keys.ts";
 import { loadPolicy, setPolicy, type PolicyInput } from "../src/lib/policy.ts";
 import { Store, id } from "../src/lib/store.ts";
 import { computeTerms } from "../src/lib/terms.ts";
@@ -26,15 +26,15 @@ export interface World {
   bundle: DisclosureBundle;
 }
 
-export async function makeWorld(policy: Partial<PolicyInput> = {}): Promise<World> {
+export async function makeWorld(policy: Partial<PolicyInput> = {}, keys: { alg?: Alg; agentAlg?: Alg } = {}): Promise<World> {
   const store = new Store(join(tmpdir(), `aap-test-${id("w")}`));
   const root = await generateKeyFile();
   await store.init(root);
-  const operatorKey = await generateKeyFile();
+  const operatorKey = await generateKeyFile(keys.alg ?? "ES256");
   const operatorCert = await issueOperator(root, { id: "op_test", key: operatorKey.public, vetting: "standard", sessionHandling: "test", profile: { asn: ["AS1"] } });
   await store.putOperator("op_test", operatorCert);
   const operator = await verifyOperator(operatorCert, root.public);
-  const agentKey = await generateKeyFile();
+  const agentKey = await generateKeyFile(keys.agentAlg ?? keys.alg ?? "ES256");
   const agentCert = await issueAgent(operatorKey, "op_test", {
     id: "ag_test",
     name: "test-agent",
