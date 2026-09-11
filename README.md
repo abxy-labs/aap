@@ -1,6 +1,6 @@
 # Agent Admission Protocol
 
-<img src="docs/images/aap-logo.svg" alt="Agent Admission Protocol logo" width="305" height="118">
+<img src="docs/images/aap-logo.svg" alt="Agent Admission Protocol logo" width="335" height="116">
 
 The Agent Admission Protocol (AAP) lets an automated agent identify itself to Foil, lets a site state which agents it admits and what those agents may do, and lets a consumer authorize an agent to act for them at a site. Sites that run Foil block automated traffic by default. The protocol adds a third category between human and bot, the agent plane, so that a site can admit the automation it has chosen to admit without loosening detection for anything else.
 
