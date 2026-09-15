@@ -2,7 +2,16 @@ import type { Tier } from "../types.ts";
 
 export const TIERS: Tier[] = ["observe", "read", "manage", "transact", "control"];
 
-export const VOCABULARY: Record<string, { tier: Tier; text: string }> = {
+export interface ScopeDef {
+  tier: Tier;
+  text: string;
+  /** The step can only ever be completed by the consumer on the site. */
+  handoff_only?: boolean;
+  /** Context fields an agent supplies when it asks for a handoff on this scope. */
+  context?: { required: string[]; optional: string[] };
+}
+
+export const VOCABULARY: Record<string, ScopeDef> = {
   "public:read": { tier: "observe", text: "See pages that do not require signing in" },
   "accounts:read": { tier: "read", text: "See your accounts and balances" },
   "transactions:read": { tier: "read", text: "See your transaction history" },
@@ -12,14 +21,20 @@ export const VOCABULARY: Record<string, { tier: Tier; text: string }> = {
   "cards:manage": { tier: "manage", text: "Lock or unlock your cards and set travel notices" },
   "disputes:write": { tier: "manage", text: "File and follow up on disputes" },
   "support:write": { tier: "manage", text: "Send secure messages and book appointments" },
-  "payments:initiate": { tier: "transact", text: "Make payments" },
-  "transfers:initiate": { tier: "transact", text: "Move money between accounts" },
-  "payees:write": { tier: "transact", text: "Add or edit payees" },
+  "application:write": { tier: "manage", text: "Fill out and submit an application", context: { required: [], optional: ["application"] } },
+  "identity:verify": { tier: "manage", text: "Verify your identity", handoff_only: true, context: { required: [], optional: ["application"] } },
+  "payments:initiate": { tier: "transact", text: "Make payments", context: { required: ["amount", "currency", "payee"], optional: ["memo", "date"] } },
+  "transfers:initiate": { tier: "transact", text: "Move money between accounts", context: { required: ["amount", "currency"], optional: ["from", "to", "memo"] } },
+  "payees:write": { tier: "transact", text: "Add or edit payees", context: { required: ["payee"], optional: ["details"] } },
   "security:write": { tier: "control", text: "Change your password, security settings, or recovery contacts" },
 };
 
 export function tierOf(scope: string): Tier | undefined {
   return VOCABULARY[scope]?.tier;
+}
+
+export function isHandoffOnly(scope: string): boolean {
+  return VOCABULARY[scope]?.handoff_only === true;
 }
 
 export function tierIndex(tier: Tier | "none"): number {
@@ -60,6 +75,5 @@ export function withinTier(scopes: string[], ceiling: Tier | "none"): string[] {
 }
 
 export function validate(scopes: string[]): string[] {
-  const unknown = scopes.filter((s) => !isKnown(s));
-  return unknown;
+  return scopes.filter((s) => !isKnown(s));
 }

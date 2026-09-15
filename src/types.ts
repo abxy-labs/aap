@@ -1,13 +1,10 @@
 export type Tier = "observe" | "read" | "manage" | "transact" | "control";
 
-export interface Money {
-  value: number;
-  currency: string;
-}
-
+/** Amounts are integers in the minor unit of `currency` (cents for USD). */
 export interface Constraints {
-  max_amount?: Money;
-  max_total?: Money;
+  currency?: string;
+  max_amount?: number;
+  max_total?: number;
   max_count?: number;
   payees?: "existing_only" | "any";
   ttl_s?: number;
@@ -80,11 +77,8 @@ export type Evidence = "asserted" | "observed" | "presented" | "site";
 export type DelegationIssuer = "foil" | "site" | "consumer";
 
 export interface CredentialPolicy {
-  /** Accepted credential types, for example "mdl" or "eu-pid". */
   types: string[];
-  /** Accepted issuers, as identifiers the verifier recognizes. */
   issuers: string[];
-  /** Claims the site may request in a presentation. */
   claims: string[];
 }
 
@@ -96,30 +90,98 @@ export interface PresentedEvidence {
   verified_at: string;
 }
 
+export type HandoffMode = "approve" | "complete";
+
+export interface HandoffConfig {
+  scope: string;
+  mode?: HandoffMode;
+  url?: string | null;
+  expires_in?: number;
+}
+
+export interface PolicyAllow {
+  operators: string[] | "any";
+  agents: string[] | "any";
+  deny_agents: string[];
+}
+
 export interface PolicyClaims {
   iss: "foil";
   sub: string;
   version: number;
   tier: Tier | "none";
-  allow: { operators: string[] | "any"; agents: string[] | "any"; deny_agents: string[] };
+  allow: PolicyAllow;
   constraints: Constraints;
   disclosures: DisclosureBundle | null;
   evidence: Partial<Record<Tier, Evidence>>;
-  handoff: string[];
+  handoffs: HandoffConfig[];
   max_age_s: number;
   disclose: { operator: boolean; agent: boolean };
-  /** Reserved for verifiable credential presentations. Null until a site configures it. */
   credentials: CredentialPolicy | null;
   iat: number;
 }
 
-export interface Terms {
+export interface ObjectBase {
+  id: string;
+  object: string;
+  created: number;
+  livemode: boolean;
+  metadata: Record<string, string>;
+}
+
+export interface PolicyObject extends ObjectBase {
+  object: "policy";
+  origin: string;
+  version: number;
+  tier: Tier | "none";
+  allow: PolicyAllow;
+  constraints: Constraints;
+  disclosures: DisclosureBundle | null;
+  evidence: Partial<Record<Tier, Evidence>>;
+  handoffs: HandoffConfig[];
+  max_age_s: number;
+  disclose: { operator: boolean; agent: boolean };
+  credentials: CredentialPolicy | null;
+  statement: string;
+}
+
+export interface AgentObject extends ObjectBase {
+  object: "agent";
+  operator: string;
+  name: string;
+  status: "active" | "deactivated";
+  public_key: JsonWebKey;
+  ceiling: Ceiling;
+  certificate: string;
+  expires_at: number;
+}
+
+export interface OperatorObject {
+  id: string;
+  object: "operator";
+  created: number;
+  account: string | null;
+  name: string;
+  vetting: string;
+  session_handling: string;
+  attestations: Attestation[];
+  profile?: OperatorProfile;
+  public_key: JsonWebKey;
+  certificate: string;
+  expires_at: number;
+}
+
+export interface TermsObject extends ObjectBase {
+  object: "terms";
+  agent: string;
+  origin: string;
   policy_version: number;
   scopes: { id: string; text: string }[];
   constraints: Constraints;
   max_age_s: number;
   evidence: Partial<Record<Tier, Evidence>>;
   disclosures: DisclosureBundle | null;
+  expires_at: number;
 }
 
 export interface Acceptance {
@@ -141,6 +203,7 @@ export interface ObservedEvidence {
 
 export interface DelegationRecord {
   id: string;
+  object: "delegation_record";
   asserted: {
     by: string;
     terms: string;
@@ -151,14 +214,12 @@ export interface DelegationRecord {
     copies_sent_to?: string;
   };
   observed: ObservedEvidence | null;
-  /** Reserved for verifiable credential presentations. Null until one is recorded. */
   presented: PresentedEvidence | null;
 }
 
 export interface DelegationClaims {
   iss: "foil";
   sub: string;
-  /** Who issued the delegation. Foil in the current version; a site or the consumer later. */
   issuer: DelegationIssuer;
   agent: string;
   operator: string;
@@ -173,6 +234,32 @@ export interface DelegationClaims {
   iat: number;
   exp: number;
   jti: string;
+}
+
+export type DelegationStatus = "active" | "revoked" | "expired";
+
+export interface DelegationObject extends ObjectBase {
+  object: "delegation";
+  status: DelegationStatus;
+  agent: string;
+  operator: string;
+  origin: string;
+  subject: string;
+  scopes: string[];
+  constraints: Constraints;
+  terms: string;
+  issuer: DelegationIssuer;
+  intent: string;
+  policy_version: number;
+  expires_at: number;
+  revoked_at: number | null;
+  revoked_by: string | null;
+  record: string;
+  certificate: string;
+}
+
+export interface StoredDelegation extends DelegationObject {
+  claims: DelegationClaims;
 }
 
 export interface ChallengeClaims {
@@ -204,7 +291,17 @@ export type DowngradeReason =
   | "grant_replayed"
   | "operator_mismatch"
   | "scope_violation"
-  | "evidence_insufficient";
+  | "evidence_insufficient"
+  | "agent_deactivated"
+  | "handoff_completed_by_agent";
+
+export interface Approval {
+  handoff: string;
+  scope: string;
+  context: Record<string, unknown>;
+  approved_at: number;
+  expires_at: number;
+}
 
 export interface AgentBlock {
   id?: string;
@@ -227,14 +324,94 @@ export interface AgentBlock {
     presented: PresentedEvidence | null;
   };
   handoff: string | null;
+  approvals: Approval[];
 }
 
-export interface SessionRecord {
-  id: string;
+export interface DowngradedBlock {
+  grant: string;
+  reason: DowngradeReason;
+  message?: string;
+}
+
+export type Plane = "human" | "agent" | "bot";
+export type SessionStatus = "active" | "requires_handoff" | "downgraded";
+
+export interface SessionRecord extends ObjectBase {
+  object: "session";
   origin: string;
-  decision: { verdict: "allow" | "block"; plane: "human" | "agent" | "bot" };
-  agent: AgentBlock | { grant: string; reason: DowngradeReason } | null;
+  plane: Plane;
+  status: SessionStatus;
+  decision: { verdict: "allow" | "block"; plane: Plane };
+  agent: AgentBlock | DowngradedBlock | null;
+  next_action: { type: "handoff"; handoff: string } | null;
+  human?: boolean;
+  known_device?: boolean;
+  device?: string;
+  created_at?: string;
+  operator_id?: string;
   grant_jti?: string;
   delegation_id?: string;
   bound_at?: string;
+}
+
+export type HandoffStatus = "pending" | "completed" | "canceled" | "expired";
+
+export interface Handoff extends ObjectBase {
+  object: "handoff";
+  status: HandoffStatus;
+  mode: HandoffMode;
+  session: string;
+  delegation: string;
+  agent: string;
+  operator: string;
+  origin: string;
+  scope: string;
+  context: Record<string, unknown>;
+  display: { title: string; message: string };
+  url: string | null;
+  code: string;
+  expires_at: number;
+  completed_at: number | null;
+  completed_by: { session: string; human: boolean; known_device: boolean; device: string; cloud_environment: boolean } | null;
+  result: Record<string, unknown> | null;
+  linked_session: string | null;
+  canceled_by: string | null;
+}
+
+export interface Account {
+  id: string;
+  object: "account";
+  created: number;
+  type: "operator" | "site";
+  name: string;
+  operator: string | null;
+  origins: string[];
+}
+
+export interface ApiKeyRecord {
+  hash: string;
+  account: string;
+  livemode: boolean;
+  prefix: string;
+  created: number;
+}
+
+export interface EventObject {
+  id: string;
+  object: "event";
+  created: number;
+  livemode: boolean;
+  type: string;
+  data: { object: unknown };
+  pending_webhooks: number;
+  request: { id: string | null; idempotency_key: string | null };
+}
+
+export interface WebhookEndpoint extends ObjectBase {
+  object: "webhook_endpoint";
+  url: string;
+  enabled_events: string[];
+  status: "enabled" | "disabled";
+  description: string | null;
+  secret?: string;
 }

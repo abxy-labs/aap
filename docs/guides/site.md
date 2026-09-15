@@ -20,8 +20,8 @@ Nothing in this guide requires a new SDK, a new endpoint on your side, or change
 | You write | Where | You read | Where |
 | --- | --- | --- | --- |
 | A policy: tier ceiling, admitted agents, constraints, disclosure bundles, evidence requirements, handoff scopes | Foil dashboard | `decision.plane` and the `agent` block | `GET /v1/sessions/{id}` |
-| A handoff completion | `POST /v1/sessions/{id}/handoff` | A delegation record for retention | `GET /v1/delegations/{id}` |
-| A revocation | `DELETE /v1/delegations/{id}` | | |
+| A handoff completion | `POST /v1/handoffs/{id}/complete` | A handoff the consumer arrived to complete | `GET /v1/handoffs/{id}` |
+| A revocation | `POST /v1/delegations/{id}/revoke` | A delegation record for retention | `GET /v1/delegations/{id}?expand[]=record` |
 
 ## Step 1: Map your routes to scopes
 
@@ -66,8 +66,9 @@ If your ceiling includes transact, set the constraints that apply to every agent
 
 | Constraint | Meaning | Who enforces it |
 | --- | --- | --- |
-| `max_amount` | Maximum per transaction | Your server, by comparing the request amount |
-| `max_total` | Maximum total across a delegation | Your server, by tracking totals per delegation id |
+| `currency` | The currency of the amounts | |
+| `max_amount` | Maximum per transaction, in the minor unit | Your server, by comparing the request amount |
+| `max_total` | Maximum total across a delegation, in the minor unit | Your server, by tracking totals per delegation id |
 | `max_count` | Maximum number of transactions across a delegation | Your server, by counting per delegation id |
 | `payees` | `existing_only` refuses new payees | Your server, at the payee routes |
 
@@ -111,7 +112,16 @@ For each tier, choose what evidence a delegation must carry before a session may
 | `presented` | The delegation must carry a verified credential presentation from the consumer. Reserved; no presentation can be recorded in the current version | Onboarding, once available |
 | `site` | The step must be completed on your site by the consumer | Anything you would not delegate to an application |
 
-Handoff scopes are scopes the consumer must complete on your site regardless of tier. Marking `payments:initiate` for handoff means an agent can prepare a payment and the consumer confirms it on your site, where your existing step-up controls apply. This is the usual configuration for a first transact deployment.
+Handoffs are steps the consumer must complete on your site regardless of tier. Configure one per scope with a mode and the URL of the page on your site that hosts the step.
+
+```json
+"handoffs": [
+  { "scope": "payments:initiate", "mode": "approve", "url": "https://bank.example/agent/confirm?aap_handoff={id}" },
+  { "scope": "identity:verify", "url": "https://bank.example/apply/verify?aap_handoff={id}", "expires_in": 86400 }
+]
+```
+
+In `approve` mode the agent proposes an action with its details, the consumer approves it on your page, and the agent then performs it; the session carries an approval your server checks the submission against. This is the usual configuration for a first transact deployment: the agent prepares a payment and the consumer confirms it where your step-up controls already are. In `complete` mode the consumer performs the step on your page and the agent resumes afterward. Identity verification is always `complete`. `{id}` in the URL is replaced with the handoff id, so your page can retrieve the handoff and render what the agent proposed. Without a URL, the consumer is told to open your site and use a short code.
 
 ## Step 7: Choose what is disclosed to you
 
@@ -123,6 +133,8 @@ When a session is on the agent plane, the verification response carries an `agen
 
 ```json
 {
+  "plane": "agent",
+  "status": "active",
   "decision": { "verdict": "allow", "plane": "agent" },
   "agent": {
     "id": "ag_9c4e",
@@ -132,18 +144,22 @@ When a session is on the agent plane, the verification response carries an `agen
     "intent": "Pay September electric bill",
     "scopes": ["accounts:read", "payments:initiate"],
     "scopes_used": ["accounts:read"],
-    "constraints": { "max_amount": { "value": 200, "currency": "USD" }, "payees": "existing_only" },
+    "constraints": { "currency": "usd", "max_amount": 20000, "payees": "existing_only" },
     "delegation": {
-      "id": "dl_3c9",
+      "id": "dl_1Qx8k2",
+      "issuer": "foil",
       "policy_version": 14,
       "created_at": "2026-09-01T14:03:40Z",
       "expires_at": "2026-10-01T14:03:40Z",
       "record": "dr_5e1",
-      "asserted": { "terms": "t_8f1", "acknowledged": ["esign", "share"], "channel": "imessage" },
-      "observed": { "site_session": "fs_2b81", "human": true, "known_device": true, "age_s": 240 }
+      "asserted": { "terms": "trm_3f2a", "acknowledged": ["esign", "share"], "channel": "imessage" },
+      "observed": { "site_session": "sess_2b81", "human": true, "known_device": true, "age_s": 240 },
+      "presented": null
     },
-    "handoff": null
-  }
+    "handoff": null,
+    "approvals": []
+  },
+  "next_action": null
 }
 ```
 
@@ -156,7 +172,10 @@ When a session is on the agent plane, the verification response carries an `agen
 | `agent.intent` | The agent's stated purpose, for logging and for your fraud team. |
 | `agent.delegation.id` | The key for tracking totals and counts, and for revocation. |
 | `agent.delegation.observed` | Whether Foil holds a link to a live session for the same consumer, and how old it was. |
-| `agent.handoff` | The scope the consumer must complete on your site, when set. |
+| `status` | `active`, `requires_handoff`, or `downgraded`. |
+| `next_action` | Set to the pending handoff when the session requires one. |
+| `agent.handoff` | The id of the pending handoff, when set. |
+| `agent.approvals` | Actions the consumer approved on your site, with the context they approved, for the agent to perform. |
 
 A session that presented a grant and failed a check arrives on the bot plane with a reason.
 
@@ -184,9 +203,12 @@ if (!session.agent.scopes.includes(scope)) return deny("outside_scope");
 
 if (scope === "payments:initiate") {
   const c = session.agent.constraints;
-  if (c.max_amount && req.amount > c.max_amount.value) return deny("over_limit");
+  if (c.max_amount !== undefined && req.amount > c.max_amount) return deny("over_limit");
   if (c.payees === "existing_only" && !isExistingPayee(req.payee)) return deny("new_payee");
-  if (c.max_total && totalFor(session.agent.delegation.id) + req.amount > c.max_total.value) return deny("over_total");
+  if (c.max_total !== undefined && totalFor(session.agent.delegation.id) + req.amount > c.max_total) return deny("over_total");
+  // approve mode: the consumer must have approved this exact payment on your site
+  const approved = session.agent.approvals.find((a) => a.scope === scope && a.context.amount === req.amount && a.context.payee === req.payee);
+  if (!approved) return deny("not_approved");
 }
 return allow();
 ```
@@ -195,23 +217,32 @@ Refuse control-tier routes for every agent session without consulting the list. 
 
 ## Step 10: Handle a handoff
 
-When an agent reaches a scope your policy marks for handoff, the verification response sets `agent.handoff` to that scope and Foil tells the operator that the consumer must complete the step. Your server should treat the agent's attempt as incomplete rather than as an error, and your page should behave as it does for any signed-in customer who arrives at that step.
+When an agent asks to perform a handoff scope, or reaches one without asking, a handoff is created. The session's status becomes `requires_handoff`, `next_action` names the handoff, and the operator is told. Treat the agent's attempt as incomplete rather than as an error.
 
-The consumer completes the step on your site from their own device. Your existing controls apply, and Foil observes a human session doing it. When the step completes, report it so that the delegation record reflects it.
+The consumer opens the handoff's URL from their own device. It is a page on your site, the one you named in your policy, with the handoff id in the query string. Build that page as follows.
+
+1. Retrieve the handoff. Confirm it is `pending`, at your origin, and for a scope you expect on this page.
+2. Render your own confirmation from the handoff's `context`, which is what the agent proposed: for a payment, the amount, currency, and payee. Do not rely on anything the agent typed into your normal forms.
+3. Apply your existing step-up controls. This is your page and your customer.
+4. When the consumer confirms, complete the handoff. The SDK on your page linked the consumer's session to the handoff when the page loaded, so the call needs only the id and whatever result you want recorded.
 
 ```
-POST /v1/sessions/{id}/handoff
-{ "scope": "payments:initiate" }
+GET  /v1/handoffs/ho_4Kq2m
+POST /v1/handoffs/ho_4Kq2m/complete     { "result": { "confirmed": true } }
 ```
 
-The `handoff` field clears, and the completed scope is added to the observed evidence in the delegation record.
+Foil checks that the completing session is at your origin, was scored human, and is not the agent's session. A completion from the agent's session is refused and the agent session is downgraded. On completion the agent session returns to `active`, the completed scope is added to the delegation record's observed evidence, and in `approve` mode an approval carrying the confirmed context is added to the session for one hour. Your server checks the agent's subsequent submission against it, as in Step 9.
+
+For identity verification the same page launches your vendor's flow after retrieving the handoff, and completes the handoff from your vendor callback with the outcome as the result. Set `expires_in` to a day for that scope, since capture takes longer than a payment confirmation.
+
+Subscribe to `handoff.created` if you want to prepare anything before the consumer arrives, and to `handoff.completed` and `handoff.expired` for your own records.
 
 ## Step 11: Revoke a delegation
 
 You can revoke any delegation at your origin. Every grant under it stops being honored at its next telemetry beat, and the operator is notified.
 
 ```
-DELETE /v1/delegations/{id}
+POST /v1/delegations/{id}/revoke
 ```
 
 Revoke when your fraud team sees activity it does not want to continue, when a customer asks you to, or when a customer closes an account. To stop an agent everywhere on your site rather than one delegation, add it to the deny list in your policy. To stop all agents, set the tier ceiling to none.
@@ -221,42 +252,43 @@ Revoke when your fraud team sees activity it does not want to continue, when a c
 The delegation record is the document your compliance team will want. Fetch it in full and store it in your own system.
 
 ```
-GET /v1/delegations/{id}
+GET /v1/delegations/{id}?expand[]=record
 ```
 
-The record contains the terms version, the document hashes, the acknowledgements given, the asserted and observed evidence, the policy version the delegation was created under, and the signature chain to Foil's root key. It can be verified without contacting Foil, so a copy in your retention store is sufficient on its own.
+The record contains the terms, the document hashes, the acknowledgements given, the asserted and observed evidence including any handoffs the consumer completed, the policy version the delegation was created under, and the signature chain to Foil's root key. It can be verified without contacting Foil, so a copy in your retention store is sufficient on its own.
 
 ## Policy recipes
 
 **Read-only balances and history.** Tier ceiling read. Admit all vetted operators. Evidence for read: asserted. A disclosure bundle with your electronic records consent and privacy notice, presentation app. No constraints, no handoff scopes. This is the configuration to start with.
 
-**Bill pay with limits.** Tier ceiling transact. Constraints: `max_amount` 200, `max_count` 5, `payees` existing_only. Evidence for transact: observed. Handoff: `payments:initiate`. The agent can read accounts and prepare a payment, and the consumer confirms each payment on your site.
+**Bill pay with limits.** Tier ceiling transact. Constraints: `currency` usd, `max_amount` 20000, `max_count` 5, `payees` existing_only. Evidence for transact: observed. Handoff on `payments:initiate` in `approve` mode with the URL of your confirmation page. The agent can read accounts and prepare a payment, and the consumer confirms each payment on your site.
 
-**Onboarding with site-only disclosures.** Tier ceiling manage, with the application scopes your onboarding flow uses. Two bundles: a privacy notice with presentation app, and the account agreement and electronic records consent with presentation site. The agent can fill the application, and the consumer reads and accepts the account agreement on your site.
+**Onboarding with identity verification.** Tier ceiling manage, admitting `application:write` and `identity:verify`. A handoff on `identity:verify` with the URL of your verification page and `expires_in` 86400. A disclosure bundle with the account agreement and electronic records consent, presentation site. The agent can fill the application, and the consumer verifies their identity and accepts the account agreement on your site.
 
 ## Test it locally
 
-The `aap` command in the reference implementation lets you stand in for an operator against your own policy. The following creates a store, an operator, an agent, and your policy, then walks a delegation and a session through verification. See the [command reference](../cli.md) for each command.
+The reference API and the `aap` command let you exercise every branch of your integration before any operator has registered. Start the API, create a site account, set your policy, and use the fixed-outcome test agents. See the [command reference](../cli.md) for each command.
 
 ```
-aap init
-aap keygen --out operator.key.json
-aap keygen --out agent.key.json
-aap operator issue --id op_test --key operator.key.json --vetting standard --session-handling test --out operator.cert
-aap agent issue --operator-cert operator.cert --operator-key operator.key.json --id ag_test --name test-agent \
-    --key agent.key.json --scopes accounts:read,payments:initiate --max-amount 500 --payees existing_only --out agent.cert
-aap policy set --origin yoursite.example --tier transact --max-amount 200 --disclosures bundle.json \
-    --evidence read=asserted,transact=observed --handoff payments:initiate --disclose operator,agent
-aap terms --agent-cert agent.cert --origin yoursite.example --scopes accounts:read,payments:initiate
+aap serve                                                              # in another terminal
+aap accounts create --type site --name "Your Site"
+aap policies create --origin yoursite.example --tier transact --currency usd --max-amount 20000 \
+    --disclosures @bundle.json --evidence read=asserted,transact=observed \
+    --handoff "scope=payments:initiate,mode=approve,url=https://yoursite.example/agent/confirm?aap_handoff={id}" \
+    --disclose operator,agent
+aap test presentations create --origin yoursite.example --agent ag_test_bound --scopes accounts:read
+aap test presentations create --origin yoursite.example --agent ag_test_replayed
+aap test presentations create --origin yoursite.example --agent ag_test_requires_handoff
 ```
 
-Write an acceptance file that references the ETag from the terms output, then create the delegation, sign a grant, and verify it. `aap site session <id>` prints exactly what your server will read, and `aap session use <id> --scope <scope>` lets you see the handoff and scope-violation paths.
+The last command returns a session in `requires_handoff` with a pending handoff in approve mode. `aap sessions retrieve <id>` prints exactly what your server will read, `aap handoffs retrieve <id>` is what your confirmation page will read, and `aap test handoffs complete <id>` stands in for the consumer confirming on your page. Retrieve the session again to see the approval. `aap listen --forward-to localhost:3000/aap/webhooks` and `aap trigger handoff.completed` exercise your webhook handler.
 
 ## Common mistakes
 
 - **Gating on the plane alone.** A session on the agent plane is not a session with every permission. Check the scope on every route.
 - **Not tracking totals.** `max_total` and `max_count` are enforced by you. If you set them without tracking per delegation, they do nothing.
 - **Reading the agent block on a bot session.** A downgraded session's block contains only the grant id and a reason. Do not look for scopes there.
+- **Rendering the confirmation from the page instead of the handoff.** The handoff's context is what the agent declared. Show and check that.
 - **Enabling transact with asserted evidence.** An application's assertion is enough for read. Money movement should require an observed link or a handoff.
 - **Keeping only Foil's copy of the record.** Fetch and store the delegation record yourself. It verifies offline and outlives your relationship with any vendor.
 - **Widening the ceiling and expecting existing delegations to widen.** They do not. The consumer accepted the narrower set, and the agent must obtain a new delegation.

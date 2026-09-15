@@ -17,8 +17,8 @@ You need the following in place.
 
 | You write | Where | You read | Where |
 | --- | --- | --- | --- |
-| An acceptance object | Passed to your operator for the delegation request | Terms | From your operator, from `GET /v1/terms` |
-| A subject identifier | Passed to your operator | A handoff notice | From your operator, from the `Foil-Agent-Handoff` header |
+| An acceptance object | Passed to your operator for the delegation request | Terms | From your operator, from `POST /v1/terms` |
+| A subject identifier | Passed to your operator | A handoff to show the consumer | From your operator, from `POST /v1/handoffs` |
 | A revocation request | Through your operator | Delegation status and expiry | From your operator |
 
 ## Step 1: Ask for what the task needs
@@ -29,16 +29,18 @@ If a later task needs more, ask again at that point. A new delegation with wider
 
 ## Step 2: Fetch the terms before you ask
 
-Before a consumer authorizes an agent at a site, your operator fetches the terms for that agent at that origin. The response is everything the consumer must be shown, already intersected with the agent's ceiling and the site's policy.
+Before a consumer authorizes an agent at a site, your operator creates terms for that agent at that origin. Terms are an object with an id and a one-hour expiry, and they are everything the consumer must be shown, already intersected with the agent's ceiling and the site's policy.
 
 ```json
 {
+  "id": "trm_3f2a",
+  "object": "terms",
   "policy_version": 14,
   "scopes": [
     { "id": "accounts:read", "text": "See your accounts and balances" },
     { "id": "payments:initiate", "text": "Make payments up to $200 each to payees you already have" }
   ],
-  "constraints": { "max_amount": { "value": 200, "currency": "USD" }, "payees": "existing_only" },
+  "constraints": { "currency": "usd", "max_amount": 20000, "payees": "existing_only" },
   "max_age_s": 2592000,
   "evidence": { "read": "asserted", "transact": "observed" },
   "disclosures": {
@@ -53,11 +55,12 @@ Before a consumer authorizes an agent at a site, your operator fetches the terms
       { "id": "share", "text": "I authorize bill-pay-assistant to access my accounts as described for 30 days" }
     ],
     "retain": "copy_required"
-  }
+  },
+  "expires_at": 1756903600
 }
 ```
 
-The response carries an ETag. Your acceptance must reference it, and Foil refuses an acceptance whose ETag does not match the current terms, so fetch the terms immediately before presenting them rather than from a stale cache. If the origin does not admit agents, the response says so and there is nothing to present.
+Your acceptance references the terms id. Foil refuses an acceptance whose terms have expired or were created under a policy the site has since changed, so create the terms immediately before presenting them rather than reusing old ones. If the origin does not admit agents, the request fails with `origin_not_participating` and there is nothing to present.
 
 ## Step 3: Present the terms
 
@@ -102,7 +105,7 @@ When the consumer has answered, build the acceptance object and pass it to your 
 
 ```json
 {
-  "terms": "t_8f1",
+  "terms": "trm_3f2a",
   "acknowledged": ["esign", "share"],
   "viewed": ["esign", "privacy"],
   "channel": "imessage",
@@ -113,7 +116,7 @@ When the consumer has answered, build the acceptance object and pass it to your 
 
 | Field | What to put in it |
 | --- | --- |
-| `terms` | The ETag of the terms you presented |
+| `terms` | The id of the terms you presented |
 | `acknowledged` | The ids of every acknowledgement the consumer agreed to. Foil refuses an acceptance missing any required acknowledgement. |
 | `viewed` | The ids of every document the consumer was shown. Every document marked `render: full` must be here. |
 | `channel` | Where the consumer accepted, such as `imessage`, `web`, `terminal`, or your product's name |
@@ -145,15 +148,37 @@ Each of these is a full presentation of the current terms, since the site's term
 
 ## Step 8: Handle a handoff
 
-Some steps must be completed by the consumer on the site, from their own device. The site marks these in its policy, and when your agent reaches one, your operator receives a handoff notice naming the scope. Tell the consumer what the step is and where to complete it, then wait.
+Some steps must be completed by the consumer on the site, from their own device: confirming a payment at most sites, verifying identity everywhere. When your agent reaches such a step, it asks your operator to create a handoff with the details of what it proposes, and your operator hands you the handoff object. Your job is to tell the consumer and wait.
+
+```json
+{
+  "id": "ho_4Kq2m",
+  "status": "pending",
+  "mode": "approve",
+  "scope": "payments:initiate",
+  "context": { "amount": 14210, "currency": "usd", "payee": "Pacific Power" },
+  "display": {
+    "title": "Confirm a payment",
+    "message": "bill-pay-assistant wants to pay $142.10 to Pacific Power from your bank.example account. Confirm it on bank.example from your own device."
+  },
+  "url": "https://bank.example/agent/confirm?aap_handoff=ho_4Kq2m",
+  "code": "7KQ-M4X",
+  "expires_at": 1756901900
+}
+```
+
+Show `display.message` and the `url` in your channel. For a voice or terminal channel, or a site that set no URL, show the `code` and tell the consumer to open the site. The message is assembled by Foil from the scope, the context, your agent's name, and the site, so it is accurate without any copy of your own.
 
 ```
 To finish this payment, bank.example needs you to confirm it yourself.
-Open bank.example on your phone and approve the payment to Pacific Power for $142.10.
+bill-pay-assistant wants to pay $142.10 to Pacific Power from your bank.example account.
+Confirm it here from your phone: https://bank.example/agent/confirm?aap_handoff=ho_4Kq2m
 I'll continue once it's done.
 ```
 
-When the site reports the step complete, the session continues. Do not attempt to complete the step through the agent, and do not ask the consumer for credentials or codes to do it on their behalf.
+Then wait. Your operator's `wait` call returns when the handoff is completed, canceled, or expired, and `handoff.completed` fires. On completion in `approve` mode the agent performs the action it proposed; in `complete` mode the consumer already performed it and the agent resumes. For identity verification the handoff's `result` carries the outcome the site reported, and your agent decides whether to continue or to tell the consumer what the site said.
+
+Do not attempt to complete the step through the agent, and do not ask the consumer for credentials or codes to do it on their behalf. A handoff completed from the agent's session is refused and the session is downgraded.
 
 ## Step 9: Let the consumer see and revoke
 
@@ -173,22 +198,20 @@ Your operator receives a reason whenever a session is downgraded. Two of them ar
 
 ## Test it locally
 
-The `aap` command in the reference implementation lets you generate terms and validate an acceptance without an operator. See the [command reference](../cli.md) for the setup commands; the two that concern you are the following.
+The reference API and the `aap` command let you generate terms, validate an acceptance, and see a handoff without a real operator relationship. Start the API and onboard an operator profile as described in the [command reference](../cli.md); the two commands that concern you are the following.
 
 ```
-aap terms --agent-cert agent.cert --origin bank.example --scopes accounts:read,payments:initiate
-aap delegation create --agent-cert agent.cert --operator-cert operator.cert --agent-key agent.key.json \
-    --origin bank.example --subject usr_1 --scopes accounts:read,payments:initiate --intent "Pay bills" \
-    --acceptance acceptance.json --out delegation.cert
+aap terms create --agent ag_… --origin bank.example --scopes accounts:read,payments:initiate
+aap delegations create --agent ag_… --origin bank.example --subject usr_1 --terms trm_… --intent "Pay bills" --acceptance @acceptance.json
 ```
 
-Write the acceptance file from your interface's output. The command refuses an acceptance with a stale ETag, a missing acknowledgement, an unviewed document that required full rendering, or a missing delivery record when a copy is required, with a message naming the problem. Those are the same checks Foil applies.
+Write the acceptance file from your interface's output. The request is refused, with a code naming the problem, for expired or stale terms, a missing acknowledgement, an unviewed document that required full rendering, or a missing delivery record when a copy is required. Those are the same checks Foil applies. To see a handoff object with a message you can render, run `aap test presentations create --origin bank.example --agent ag_test_requires_handoff` from a site profile and `aap handoffs retrieve <id>`.
 
 ## Common mistakes
 
 - **Summarizing a document marked for full rendering.** The site required the whole text. Show it.
 - **Pre-selected or bundled acknowledgements.** Each one is a separate, explicit yes.
-- **Presenting stale terms.** Fetch immediately before presenting. An acceptance with an old ETag is refused.
+- **Presenting stale terms.** Create terms immediately before presenting. An acceptance of expired or superseded terms is refused.
 - **Asking per session.** A delegation lasts for its maximum age. Ask once and reuse it.
 - **Personal data in the subject.** The subject is pseudonymous and stable. Nothing else.
 - **Asking for the ceiling.** Ask for what the task needs.

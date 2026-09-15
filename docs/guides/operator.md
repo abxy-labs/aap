@@ -18,7 +18,8 @@ You need the following in place.
 | You write | Where | You read | Where |
 | --- | --- | --- | --- |
 | Agent certificates | Your own store; presented in the chain | Operator certificate | Issued at registration |
-| Delegation requests, signed with the agent key | `POST /v1/delegations` | Terms | `GET /v1/terms` |
+| Delegation requests, signed with the agent key | `POST /v1/delegations` | Terms | `POST /v1/terms` |
+| Handoffs, with what the agent proposes | `POST /v1/handoffs` | The handoff's outcome | `GET /v1/handoffs/{id}`, or `handoff.completed` |
 | Grants, signed with the agent key | `Foil-Agent-Grant` header on telemetry | Challenges | `Foil-Agent-Challenge` header on telemetry responses |
 | | | Status and handoff | `Foil-Agent-Status` and `Foil-Agent-Handoff` headers on telemetry responses |
 | | | The root public key | `GET /.well-known/foil-root` |
@@ -46,7 +47,7 @@ An agent is a named product or agent type, not a session. Issue one certificate 
   "key": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" },
   "ceiling": {
     "scopes": ["accounts:read", "transactions:read", "payments:initiate"],
-    "constraints": { "max_amount": { "value": 500, "currency": "USD" }, "payees": "existing_only" }
+    "constraints": { "currency": "usd", "max_amount": 50000, "payees": "existing_only" }
   },
   "nbf": 1756900000,
   "exp": 1764676000
@@ -67,11 +68,11 @@ Certificates are valid for 90 days by default. Rotate by issuing a new certifica
 
 A delegation is created once for each consumer, agent, and site combination and lasts for its maximum age, which the site sets. The application collects the consumer's acceptance; you sign the request and post it. The application side is described in [Integrate an agent application](agent-app.md). Your side is the following.
 
-1. Fetch the terms for the agent at the origin. The response is cacheable by ETag and changes only when the site's policy changes.
-2. Pass the terms to the application, which presents them and returns an acceptance object.
-3. Build the delegation request with the agent id, the origin, your subject identifier for the end user, the scopes the task needs, the intent, and the acceptance. If the consumer has a live session at the site on their own device, include its Foil session id as `site_session`; see Step 8.
-4. Sign the request with the agent key and post it.
-5. Store the delegation certificate keyed by subject, agent, and origin, together with its expiry.
+1. Create terms for the agent at the origin. Terms are an object with an id and a one-hour expiry; they change only when the site's policy changes, in which case the acceptance must be collected again.
+2. Pass the terms to the application, which presents them and returns an acceptance object referencing the terms id.
+3. Build the delegation request with the agent id, the origin, your subject identifier for the end user, the scopes the task needs, the intent, and the acceptance. If the consumer has a live session at the site on their own device, include its session id as `site_session`; see Step 9.
+4. Sign the request with the agent key and post it. The SDK does both in `aap.delegations.create`.
+5. Store the delegation keyed by subject, agent, and origin, together with its expiry.
 
 ```
 POST /v1/delegations
@@ -80,11 +81,11 @@ POST /v1/delegations
   "origin": "bank.example",
   "subject": "usr_41b",
   "scopes": ["accounts:read", "payments:initiate"],
+  "terms": "trm_3f2a",
   "intent": "Pay monthly bills",
-  "acceptance": { "terms": "t_8f1", "acknowledged": ["esign", "share"], "viewed": ["esign", "privacy"],
+  "acceptance": { "terms": "trm_3f2a", "acknowledged": ["esign", "share"], "viewed": ["esign", "privacy"],
                   "channel": "imessage", "accepted_at": "2026-09-01T14:03:40Z", "copies_sent_to": "email" },
-  "site_session": "fs_2b81",
-  "chain": ["<agent certificate>", "<operator certificate>"],
+  "site_session": "sess_2b81",
   "signature": "<request signed with the agent key>"
 }
 ```
@@ -143,12 +144,13 @@ Frames are evaluated separately. A page that embeds a widget from another partic
 
 ## Step 7: Read the feedback
 
-Foil reports on the telemetry response, which your browser already receives. There is no webhook to operate for normal flow.
+Foil reports on the telemetry response, which your browser already receives. There is no webhook to operate for normal flow, although every change is also an event you can subscribe to.
 
 ```
 Foil-Agent-Status: bound
 Foil-Agent-Status: downgraded; reason=grant_replayed
-Foil-Agent-Handoff: required; scope=payments:initiate
+Foil-Agent-Handoff: required; id=ho_4Kq2m
+Foil-Agent-Handoff: completed; id=ho_4Kq2m
 ```
 
 | Status | What it means | What to do |
@@ -159,16 +161,36 @@ Foil-Agent-Handoff: required; scope=payments:initiate
 | `downgraded; reason=delegation_revoked` | The site or the consumer revoked the delegation | Stop the task and ask the consumer for a new delegation if appropriate |
 | `downgraded; reason=delegation_expired` | The delegation passed its maximum age | Ask the consumer again |
 | `downgraded; reason=policy_denied` | The site's current policy does not admit this operator or agent, or the scopes are above its ceiling | Stop; the site has made a decision |
+| `downgraded; reason=agent_deactivated` | You deactivated the agent | Expected |
 | `downgraded; reason=grant_replayed` | The grant was presented by another session | Sign one grant per session; investigate if you did |
 | `downgraded; reason=operator_mismatch` | The session does not look like your infrastructure | Investigate the session; this may indicate a leaked agent key |
 | `downgraded; reason=evidence_insufficient` | The tier in use requires observed evidence and the delegation has only asserted evidence | Create the delegation while the consumer has a live session at the site, or narrow the grant to read |
 | `downgraded; reason=scope_violation` | The session exercised a scope outside its grant | Fix the agent; it acted outside what it declared |
+| `downgraded; reason=handoff_completed_by_agent` | A handoff was completed from the agent's own session | Fix the agent; only the consumer completes handoffs |
 
-`Foil-Agent-Handoff: required` means the agent reached a step the consumer must complete on the site from their own device. Surface it to the application so it can tell the consumer, then wait. When the site reports the step complete, the session continues.
+`Foil-Agent-Handoff: required` names a handoff the consumer must complete on the site from their own device, and `completed` tells you it is done. Prefer to create handoffs yourself, as described in the next step, rather than reaching a handoff scope and being told.
 
-A site or consumer revoking a delegation is reported on the next telemetry response and is also available as an optional webhook.
+A site or consumer revoking a delegation is reported on the next telemetry response and as a `delegation.revoked` event.
 
-## Step 8: Support session transfer
+## Step 8: Ask for handoffs before acting
+
+Some scopes require the consumer to confirm or complete a step on the site: money movement at most sites, identity verification everywhere. Your agent can reach such a scope and be told, but it is better to ask first, because a handoff you create carries the details of what the agent proposes, and a handoff created because the agent bumped into the scope carries nothing and can only be completed by the consumer doing the whole step themselves.
+
+```ts
+const ho = await aap.handoffs.create({
+  session: sessionId, scope: "payments:initiate",
+  context: { amount: 14210, currency: "usd", payee: "Pacific Power", memo: "September electric" },
+});
+await app.notifyConsumer(ho.display.message, ho.url);      // the application's job, in its own channel
+const done = await aap.handoffs.wait(ho.id, { timeout: 900 });
+if (done.status === "completed") await submitPayment();  // the site checks it against the approval
+```
+
+The handoff's `display.message` is plain language assembled by Foil, `url` is the site's own page for the step with the handoff id filled in, and `code` is for channels where a link cannot be tapped. Hand all three to the application. In `approve` mode the session gains an approval when the consumer confirms, and the agent performs the action; in `complete` mode the consumer performs it, and the agent resumes. `wait` polls until the handoff completes, is canceled, or expires. Subscribe to `handoff.completed` if you would rather be told.
+
+Never complete a handoff from the agent's session, and never relay a code or a credential from the consumer to do so. A completion from the agent's session is refused, and the session is downgraded.
+
+## Step 9: Support session transfer
 
 Many agents begin with the consumer signing in to a site on their own device, after which the session continues in your cloud browser. To a site this looks like cookie theft. The protocol turns it into evidence when the delegation was created while the consumer's session at the site was live and Foil could observe it.
 
@@ -176,7 +198,7 @@ To provide that link, your local component on the consumer's device reads the Fo
 
 A delegation created this way carries observed evidence, which is what sites require for manage and transact tiers. A delegation created without it carries asserted evidence only, which sites accept for read.
 
-## Step 9: Cache the directory
+## Step 10: Cache the directory
 
 The directory is a hashed list of origins whose policy admits agents. It is optional. With it cached, you can present the grant on the first telemetry request from a participating origin instead of waiting for the challenge on the first response, which saves one telemetry beat at the start of a session. Sync it by ETag and hash origins with SHA-256 of the lowercase origin to check membership.
 
@@ -186,33 +208,34 @@ GET /v1/directory
 
 The directory also lets you verify the confidentiality guarantee yourself, since an origin absent from it never receives a presentation from you regardless of what it sends.
 
-## Step 10: Handle expiry and revocation
+## Step 11: Handle expiry and revocation
 
 Track each delegation's `expires_at`. Before it passes, ask the consumer again through the application if the relationship is ongoing. A revoked delegation is reported as `delegation_revoked` on the next presentation and through the optional webhook. Remove revoked and expired delegations from your store so that no session attempts to present under them.
 
 ## Test it locally
 
-The `aap` command in the reference implementation lets you stand in for Foil and for a site. The following creates a store, registers you, issues an agent, sets a site policy, and takes a delegation and a grant through verification. See the [command reference](../cli.md) for each command.
+The reference API and the `aap` command let you stand in for Foil and for a site. Start the API, onboard yourself and a site as two profiles, and take a delegation and a grant through verification. See the [command reference](../cli.md) for each command; [examples/lifecycle.sh](../../examples/lifecycle.sh) runs all of it.
 
 ```
-aap init
-aap keygen --out operator.key.json
-aap keygen --out agent.key.json
-aap operator issue --id op_you --key operator.key.json --vetting standard --session-handling "encrypted at rest" --asn AS14618 --out operator.cert
-aap agent issue --operator-cert operator.cert --operator-key operator.key.json --id ag_one --name your-agent \
-    --key agent.key.json --scopes accounts:read,payments:initiate --max-amount 500 --out agent.cert
-aap policy set --origin bank.example --tier transact --evidence read=asserted,transact=observed --handoff payments:initiate
-aap terms --agent-cert agent.cert --origin bank.example --scopes accounts:read,payments:initiate
-aap site session-record --id fs_live --origin bank.example --human --known-device --age-s 120
-aap delegation create --agent-cert agent.cert --operator-cert operator.cert --agent-key agent.key.json \
-    --origin bank.example --subject usr_1 --scopes accounts:read,payments:initiate --intent "Pay bills" \
-    --acceptance acceptance.json --site-session fs_live --out delegation.cert
-aap challenge --origin bank.example --out challenge.jwt
-aap challenge verify challenge.jwt
-aap grant sign --agent-key agent.key.json --agent-cert agent.cert --delegation delegation.cert \
-    --session-ref sess_1 --intent "Pay electric bill" --challenge challenge.jwt --out grant.jwt
-aap present --grant grant.jwt --delegation delegation.cert --agent-cert agent.cert --operator-cert operator.cert --out header.txt
-aap verify --header-file header.txt --origin bank.example --session fs_agent --asn AS14618
+aap serve                                                                          # in another terminal
+aap --profile operator accounts create --type operator --name "Your Company" --asn AS14618
+aap --profile site accounts create --type site --name "A Bank"
+aap --profile site policies create --origin bank.example --tier transact --evidence read=asserted,transact=observed \
+    --handoff "scope=payments:initiate,mode=approve,url=https://bank.example/agent/confirm?aap_handoff={id}"
+
+aap --profile operator agents create --name your-agent --scopes accounts:read,payments:initiate --currency usd --max-amount 50000
+aap --profile operator terms create --agent ag_… --origin bank.example --scopes accounts:read,payments:initiate
+aap --profile site test sessions create --origin bank.example --known-device --age 120        # the consumer's live session
+aap --profile operator delegations create --agent ag_… --origin bank.example --subject usr_1 --terms trm_… \
+    --intent "Pay bills" --acceptance @acceptance.json --site-session sess_…
+aap --profile operator test challenges create --origin bank.example --out challenge.jwt
+aap --profile operator challenges verify challenge.jwt
+aap --profile operator grants sign --delegation dl_… --challenge challenge.jwt --session-ref sess_1 --intent "Pay electric bill" --out grant.jwt
+aap --profile operator present --grant grant.jwt --delegation dl_… --out header.txt
+aap --profile operator test presentations create --origin bank.example --header-file header.txt --asn AS14618
+aap --profile operator handoffs create --session sess_… --scope payments:initiate --context.amount 14210 --context.currency usd --context.payee "Pacific Power"
+aap --profile operator handoffs wait ho_… --timeout 5m &
+aap --profile site test handoffs complete ho_…
 ```
 
 Present the same header from a second session id to see `grant_replayed`, pass a different `--asn` to see `operator_mismatch`, and omit `--site-session` to see `evidence_insufficient` at the transact tier.
@@ -226,3 +249,4 @@ Present the same header from a second session id to see `grant_replayed`, pass a
 - **Wide ceilings.** An agent that asks for the whole vocabulary is harder for a site to admit and easier for a site to deny by name.
 - **Asking the consumer per session.** A delegation lasts for its maximum age. Reuse it.
 - **Personal data in the subject.** The subject is a pseudonymous identifier. Foil does not need to know who the consumer is.
+- **Reaching handoff scopes instead of asking.** A handoff you create carries what the agent proposes and can be approved; one created because the agent bumped into the scope cannot.
