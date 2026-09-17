@@ -96,11 +96,21 @@ The lifecycle has three phases with different frequencies. Setup happens once fo
 ![Lifecycle](images/lifecycle.svg)
 
 
+### Institution discovery
+
+Institutions MAY publish a public `GET /.well-known/aap` document on their own
+origin to advertise protocol/API versions, service endpoints, and optional
+capabilities. See [Institution discovery](discovery.md) for the format, hosting,
+client behavior, and trust boundaries. Discovery locates the service; it does
+not grant permission, require attestations, or replace customer consent,
+institution policy, or the signed challenge. Configured service addresses and
+the optional central directory remain supported.
+
 ### Where the grant is presented
 
 The Foil SDK on a site's pages sends telemetry to Foil's API hosts. For an origin whose policy admits agents, Foil includes a signed challenge in the telemetry response: a nonce bound to the origin and a short time window. The operator's browser, which controls the network layer beneath the page, verifies the challenge against Foil's root key and, on the next telemetry request, adds a header carrying the grant and the chain, signed over the challenge. The header is injected at the network layer, so page scripts and service workers cannot observe it, and it is sent only to Foil's hosts. Nothing changes in any request to the site.
 
-Because the challenge is signed by Foil and issued only for participating origins, an operator never presents credentials to a site that has not opted in. A cached directory of participating origins is available for operators that want to present on the first telemetry request instead of the second, but it is not required.
+Because the challenge is signed by Foil and issued only for participating origins, an operator never presents credentials to a site that has not opted in. An optional cached directory of participating origins provides a discovery hint; it does not replace a fresh, origin-bound signed challenge or let an operator skip challenge acquisition.
 
 One grant covers a browser session across origins. When a page embeds a widget from another participating origin in a frame, or opens a participating site in a popup, the same grant is evaluated under each origin's own policy as those frames appear.
 

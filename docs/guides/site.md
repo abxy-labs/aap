@@ -13,7 +13,12 @@ You need the following in place.
 - An inventory of the routes or actions on your site that an agent could reach, so you can map them to scopes.
 - Your disclosure documents, if the flows you are opening require them, and agreement from your compliance team on which acknowledgements the customer must give.
 
-Nothing in this guide requires a new SDK, a new endpoint on your side, or changes to your pages.
+The core grant flow does not require a new endpoint on your side or changes to
+your pages. For public discovery, you can additionally serve a static document
+at `/.well-known/aap` on your institution origin. Generate it with
+`aap discovery create --origin https://bank.example --api-base https://aap.example --out aap.json`.
+See [Institution discovery](../discovery.md) for hosting and optional credential
+capabilities. Publishing this file does not replace configuring your policy.
 
 ## What you read and what you write
 

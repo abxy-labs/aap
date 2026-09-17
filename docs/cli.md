@@ -28,6 +28,24 @@ aap demo [--keep]
 
 Runs the whole lifecycle against an in-process API and prints each step: onboarding, an agent, a policy, terms, a delegation with observed evidence, a challenge, a grant, verification, the site's view of the session, a handoff in approve mode completed by the consumer, a replayed grant, a revocation, and the events that were recorded. Nothing outside a temporary directory is touched.
 
+## Institution discovery
+
+```sh
+aap discovery create --origin https://bank.example --api-base https://aap.example [--credentials] [--out aap.json]
+aap discovery retrieve https://bank.example
+aap serve --discovery aap.json [--port 4010]
+```
+
+`create` generates public metadata offline for an institution to host at
+`/.well-known/aap`; `--credentials` advertises optional presentation support,
+not a requirement. `--out` refuses to overwrite an existing file. `retrieve`
+needs no login, sends no API key, and never changes your configured service or
+trusted keys. `serve --discovery` mounts a validated profile only for its exact
+configured request origin; without it, discovery is not published. Use
+`--allow-local` on each command only for loopback development over HTTP.
+See [Institution discovery](discovery.md) for the complete two-terminal example,
+supported fields, cache behavior, and security requirements.
+
 ## Accounts and profiles
 
 The command line keeps profiles in `~/.config/aap/config.json`, or under `AAP_CONFIG_DIR`. A profile holds the API base URL, a test key, a live key, and the paths of the signing keys it has generated. Commands use the current profile; `--profile NAME` selects another, and one machine typically has an `operator` profile and a `site` profile.

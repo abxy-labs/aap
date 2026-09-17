@@ -1,5 +1,15 @@
 # Integrate an operator
 
+## Discover an institution
+
+Use `aap discovery retrieve https://bank.example` or the SDK's `discover(origin)`
+to read an institution's optional `/.well-known/aap` document. It locates the
+service and advertises capabilities, but does not send your API key, switch
+your configured service, or establish issuer trust. Approve the advertised
+service and use credentials issued for it before requesting terms. Existing
+explicit service configuration and the signed-challenge flow still work without
+public discovery. See [Institution discovery](../discovery.md).
+
 Third-party evidence about your operator is covered in
 [Issue identity and risk credentials](identity-risk-provider.md). You can also be
 an issuer for checks you perform on your own users; a receiving institution decides
@@ -206,13 +216,19 @@ A delegation created this way carries observed evidence, which is what sites req
 
 ## Step 10: Cache the directory
 
-The directory is a hashed list of origins whose policy admits agents. It is optional. With it cached, you can present the grant on the first telemetry request from a participating origin instead of waiting for the challenge on the first response, which saves one telemetry beat at the start of a session. Sync it by ETag and hash origins with SHA-256 of the lowercase origin to check membership.
+The directory is an optional hashed list of origins whose policy admits agents.
+Hash origins with SHA-256 of the lowercase origin to check membership. It is a
+participation hint only: obtain a fresh, origin-bound signed challenge before
+presenting a grant. The reference directory does not implement ETag caching;
+the public `/.well-known/aap` document does, for endpoint/capability discovery.
 
 ```
 GET /v1/directory
 ```
 
-The directory also lets you verify the confidentiality guarantee yourself, since an origin absent from it never receives a presentation from you regardless of what it sends.
+Treat the cached directory as a hint that may become stale. A known domain's hash
+can be tested by anyone with the list. The signed challenge, not the hash, is the
+proof required before the browser sends a grant to the configured Foil service.
 
 ## Step 11: Handle expiry and revocation
 
