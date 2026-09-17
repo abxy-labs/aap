@@ -1,4 +1,4 @@
-import type { EventObject, WebhookEndpoint } from "../types.ts";
+import type { Account, EventObject, WebhookEndpoint } from "../types.ts";
 import { invalid } from "./errors.ts";
 import { Store, id, now } from "./store.ts";
 
@@ -23,8 +23,51 @@ function matches(endpoint: WebhookEndpoint, type: string): boolean {
   return endpoint.status === "enabled" && (endpoint.enabled_events.includes("*") || endpoint.enabled_events.includes(type));
 }
 
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+async function currentEventObject(store: Store, evt: EventObject): Promise<Record<string, unknown>> {
+  const snapshot = record(evt.data.object) ?? {};
+  const object = typeof snapshot.object === "string" ? snapshot.object : evt.type.split(".")[0];
+  const objectId = typeof snapshot.id === "string" ? snapshot.id : null;
+  if (!objectId) return snapshot;
+  const current = object === "agent" ? await store.getAgentObject(objectId)
+    : object === "policy" ? await store.getPolicyObject(objectId)
+    : object === "terms" ? await store.getTerms(objectId)
+    : object === "delegation" ? await store.getDelegation(objectId)
+    : object === "session" ? await store.getSession(objectId)
+    : object === "handoff" ? await store.getHandoff(objectId)
+    : null;
+  return record(current) ?? snapshot;
+}
+
+/** Resolve the operator and site accounts that are parties to an event's underlying object. */
+export async function eventAccountIds(store: Store, evt: EventObject): Promise<Set<string>> {
+  const object = await currentEventObject(store, evt);
+  const snapshot = record(evt.data.object) ?? {};
+  const origin = typeof object.origin === "string" ? object.origin : typeof snapshot.origin === "string" ? snapshot.origin : null;
+  const operators = new Set<string>();
+  for (const candidate of [object.operator, object.operator_id, snapshot.operator, snapshot.operator_id]) {
+    if (typeof candidate === "string") operators.add(candidate);
+  }
+  for (const candidate of [object.agent, snapshot.agent]) {
+    if (typeof candidate === "string") {
+      const agent = await store.getAgentObject(candidate);
+      if (agent?.operator) operators.add(agent.operator);
+    } else {
+      const agent = record(candidate);
+      if (typeof agent?.operator === "string") operators.add(agent.operator);
+    }
+  }
+  const accounts = await store.listAccounts();
+  return new Set(accounts.filter((account: Account) =>
+    (account.type === "operator" && !!account.operator && operators.has(account.operator)) ||
+    (account.type === "site" && !!origin && account.origins.includes(origin)),
+  ).map((account) => account.id));
+}
+
 export async function emitEvent(store: Store, type: EventType, object: unknown, request: { id?: string; idempotency_key?: string } = {}): Promise<EventObject> {
-  const endpoints = (await store.listWebhookEndpoints()).filter((e) => matches(e, type));
   const evt: EventObject = {
     id: id("evt"),
     object: "event",
@@ -32,9 +75,15 @@ export async function emitEvent(store: Store, type: EventType, object: unknown, 
     livemode: store.livemode,
     type,
     data: { object },
-    pending_webhooks: endpoints.length,
+    pending_webhooks: 0,
     request: { id: request.id ?? null, idempotency_key: request.idempotency_key ?? null },
   };
+  const accounts = await eventAccountIds(store, evt);
+  const endpoints = (await store.listWebhookEndpoints()).filter((endpoint) => {
+    const account = endpoint.metadata.__account;
+    return !!account && accounts.has(account) && matches(endpoint, type);
+  });
+  evt.pending_webhooks = endpoints.length;
   await store.putEvent(evt);
   for (const endpoint of endpoints) {
     const p = deliver(store, endpoint, evt).catch(() => undefined);

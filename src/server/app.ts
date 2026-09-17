@@ -74,6 +74,7 @@ export async function createApp(baseStore: Store): Promise<App> {
     let principal: Principal | null = null;
     let status = 200;
     let errorCode: string | undefined;
+    let idempotency: { store: Store; account: string; key: string; requestHash: string } | null = null;
     try {
       if (path === "/v1/dev/logs" && req.method === "GET") {
         const after = Number(url.searchParams.get("after") ?? 0);
@@ -118,14 +119,15 @@ export async function createApp(baseStore: Store): Promise<App> {
           status = prior.status;
           return json(prior.body, prior.status, requestId, { "idempotent-replayed": "true" });
         }
+        idempotency = { store, account: principal.account.id, key: idempotencyKey, requestHash };
       }
       const expandPaths = [...url.searchParams.getAll("expand[]"), ...(url.searchParams.get("expand")?.split(",") ?? []), ...((body.expand as string[] | undefined) ?? [])].filter(Boolean);
       delete body.expand;
       const result = await match.route.handler({ req, params: match.params, query: url.searchParams, body, principal, store, root, requestId, idempotencyKey, expand: expandPaths });
       const expanded = await expand(store, result, expandPaths);
       status = match.route.status ?? 200;
-      if (idempotencyKey && principal) {
-        await store.putIdempotency(principal.account.id, idempotencyKey, { request_hash: requestHash, status, body: expanded, created: Math.floor(Date.now() / 1000) });
+      if (idempotency) {
+        await idempotency.store.putIdempotency(idempotency.account, idempotency.key, { request_hash: idempotency.requestHash, status, body: expanded, created: Math.floor(Date.now() / 1000) });
       }
       return json(expanded, status, requestId);
     } catch (e) {
@@ -133,7 +135,11 @@ export async function createApp(baseStore: Store): Promise<App> {
       status = err.status;
       errorCode = err.code;
       if (!(e instanceof ApiError)) console.error(`[${requestId}]`, e);
-      return json(errorBody(err, requestId), err.status, requestId);
+      const body = errorBody(err, requestId);
+      if (idempotency) {
+        await idempotency.store.putIdempotency(idempotency.account, idempotency.key, { request_hash: idempotency.requestHash, status, body, created: Math.floor(Date.now() / 1000) });
+      }
+      return json(body, err.status, requestId);
     } finally {
       logs.push({ seq: ++seq, id: requestId, time: Date.now(), method: req.method, path, status, ms: Math.round(performance.now() - started), account: principal?.account.id ?? null, livemode: principal?.livemode ?? null, ...(errorCode ? { error: errorCode } : {}) });
       if (logs.length > 2000) logs.splice(0, logs.length - 2000);

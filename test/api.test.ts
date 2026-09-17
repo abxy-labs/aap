@@ -116,6 +116,21 @@ describe("conventions", () => {
     expect(err.type).toBe("idempotency_error");
   });
 
+  test("idempotency keys replay failures after resource state changes", async () => {
+    const created = await operator.agents.create({ name: "idempotency-test", ceiling: { scopes: ["accounts:read"], constraints: {} } });
+    await operator.agents.deactivate(created.id);
+    const key = `idem_${id("k")}`;
+    const path = `/v1/agents/${created.id}/deactivate`;
+    const first = await operator.request("POST", path, {}, { idempotencyKey: key }).then(() => { throw new Error("expected an error"); }, (e) => e as AapError);
+    expect(first.code).toBe("agent_already_deactivated");
+    created.status = "active";
+    await store.putAgentObject(created);
+    const replay = await operator.request("POST", path, {}, { idempotencyKey: key }).then(() => { throw new Error("expected an error"); }, (e) => e as AapError);
+    expect(replay.code).toBe(first.code);
+    expect(replay.requestId).toBe(first.requestId);
+    expect((await store.getAgentObject(created.id))?.status).toBe("active");
+  });
+
   test("lists paginate newest first with cursors", async () => {
     for (let i = 0; i < 4; i++) await operator.terms.create({ agent: agent.id, origin: ORIGIN, scopes: ["accounts:read"] });
     const page1 = await operator.delegations.list({ limit: 2 });
@@ -333,5 +348,30 @@ describe("test agents, events, and webhooks", () => {
     const list = await operator.events.list({ type: "delegation.created", limit: 5 });
     expect(list.data.every((e) => e.type === "delegation.created")).toBe(true);
     expect(list.data.length).toBeGreaterThan(0);
+  });
+
+  test("events and webhook deliveries are restricted to participating accounts", async () => {
+    const other = await anon.accounts.create({ type: "site", name: "Unrelated Site" });
+    const otherSite = clientFor(other.keys.test);
+    const deliveries: string[] = [];
+    const receiver = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(req) { deliveries.push(await req.text()); return new Response("ok"); } });
+    try {
+      const mine = await site.webhookEndpoints.create({ url: `http://127.0.0.1:${receiver.port}/mine`, enabled_events: ["delegation.revoked"] });
+      const theirs = await otherSite.webhookEndpoints.create({ url: `http://127.0.0.1:${receiver.port}/theirs`, enabled_events: ["delegation.revoked"] });
+      const operatorAccount = await operator.account.retrieve();
+      const evt = await site.test.events.trigger("delegation.revoked", {
+        data: { id: "dl_scoped", object: "delegation", origin: ORIGIN, operator: operatorAccount.operator!.id },
+      });
+      await flushDeliveries();
+      expect(deliveries).toHaveLength(1);
+      expect(JSON.parse(deliveries[0]!).id).toBe(evt.id);
+      expect((await operator.events.retrieve(evt.id)).id).toBe(evt.id);
+      expect((await otherSite.events.list()).data.some((event) => event.id === evt.id)).toBe(false);
+      expect((await otherSite.events.retrieve(evt.id).then(() => { throw new Error("expected an error"); }, (e) => e as AapError)).status).toBe(404);
+      await site.webhookEndpoints.del(mine.id);
+      await otherSite.webhookEndpoints.del(theirs.id);
+    } finally {
+      receiver.stop(true);
+    }
   });
 });

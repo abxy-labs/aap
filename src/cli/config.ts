@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { KeyFile } from "../lib/keys.ts";
@@ -24,6 +24,16 @@ export function configDir(): string {
 
 const EMPTY: Config = { current: "default", profiles: {} };
 
+async function writePrivateJson(path: string, value: unknown): Promise<void> {
+  const file = await open(path, "w", 0o600);
+  try {
+    await file.chmod(0o600);
+    await file.writeFile(JSON.stringify(value, null, 2));
+  } finally {
+    await file.close();
+  }
+}
+
 export async function loadConfig(): Promise<Config> {
   const f = Bun.file(join(configDir(), "config.json"));
   if (!(await f.exists())) return structuredClone(EMPTY);
@@ -36,7 +46,7 @@ export async function loadConfig(): Promise<Config> {
 
 export async function saveConfig(c: Config): Promise<void> {
   await mkdir(configDir(), { recursive: true });
-  await Bun.write(join(configDir(), "config.json"), JSON.stringify(c, null, 2));
+  await writePrivateJson(join(configDir(), "config.json"), c);
 }
 
 export function getProfile(c: Config, name?: string): { name: string; profile: Profile } {
@@ -48,7 +58,7 @@ export async function saveKeyFile(profileName: string, kind: "operator" | "agent
   const dir = join(configDir(), "keys", profileName);
   await mkdir(dir, { recursive: true });
   const path = join(dir, `${kind}.${id.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
-  await Bun.write(path, JSON.stringify(key, null, 2));
+  await writePrivateJson(path, key);
   return path;
 }
 
