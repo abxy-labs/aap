@@ -3,6 +3,7 @@ import { UsageError, all, bool, list, num, parseArgs, str, type FlagValue } from
 import { verifyAgent, verifyOperator } from "./lib/certs.ts";
 import { verifyChallenge } from "./lib/challenge.ts";
 import { verifyDelegation } from "./lib/delegation.ts";
+import { createDiscoveryProfile, discover, validateDiscoveryProfile } from "./lib/discovery.ts";
 import { decode } from "./lib/jwt.ts";
 import { ALGS, generateKeyFile, readKeyFile, type Alg } from "./lib/keys.ts";
 import { Store } from "./lib/store.ts";
@@ -22,7 +23,7 @@ Getting started
   login [--api-key K] [--live-key K] [--api-base URL]   Store an API key for this profile
   accounts create --type operator|site --name NAME     Reference-server onboarding; logs you in
   whoami                                               The account behind the current key
-  serve [--port 4010] [--store DIR]                    Run the reference API locally
+  serve [--port 4010] [--store DIR] [--discovery FILE] [--allow-local]  Run the reference API locally
   demo [--keep]                                        Run the whole lifecycle against an in-process API
 
 Resources (create, retrieve, list, and the verbs shown)
@@ -35,6 +36,8 @@ Resources (create, retrieve, list, and the verbs shown)
   events          retrieve ID | list [--type T]
   webhook-endpoints  create --url U [--enabled-events a,b] | retrieve ID | list | update ID | delete ID
   directory       list
+  discovery       create --origin URL --api-base URL [--out FILE] [--allow-local] (offline)
+                  retrieve ORIGIN [--allow-local] (public, no login)
 
 Local signing (nothing is sent to the API except reads)
   grants sign --delegation ID --challenge JWT|FILE --session-ref REF [--intent T] [--scopes a,b] [--out FILE]
@@ -300,10 +303,29 @@ async function main(argv: string[]): Promise<number> {
     }
     case "serve": {
       const store = Store.resolve(str(flags, "store"));
-      const server = await startServer({ store, port: num(flags, "port") ?? 4010 });
+      const discoveryFile = str(flags, "discovery");
+      const allowLocalDiscovery = bool(flags, "allow-local");
+      const discovery = discoveryFile ? validateDiscoveryProfile(JSON.parse(await readText(discoveryFile.replace(/^@/, ""))), undefined, { allowLocal: allowLocalDiscovery }) : undefined;
+      const server = await startServer({ store, port: num(flags, "port") ?? 4010, discovery, allowLocalDiscovery });
       console.log(`aap reference API listening on ${server.url} (store ${store.rootDir})`);
       console.log(`Create an account: aap accounts create --type operator --name "Your Company" --api-base ${server.url}`);
       await new Promise(() => undefined);
+      return 0;
+    }
+    case "discovery": {
+      const opts = { allowLocal: bool(flags, "allow-local") };
+      if (sub === "retrieve") {
+        const origin = rest[0] ?? str(flags, "origin", true)!;
+        out(await discover(origin, opts));
+        return 0;
+      }
+      if (sub !== "create") throw new UsageError("usage: discovery create --origin URL --api-base URL [--out FILE] [--allow-local] | discovery retrieve ORIGIN");
+      const profile = createDiscoveryProfile({ origin: str(flags, "origin", true)!, apiBase: str(flags, "api-base", true)! }, opts);
+      const path = str(flags, "out");
+      if (path) {
+        await (await import("node:fs/promises")).writeFile(path, JSON.stringify(profile, null, 2) + "\n", { mode: 0o644, flag: "wx" });
+        out({ out: path, publish_at: `${profile.origin}/.well-known/aap` });
+      } else out(profile);
       return 0;
     }
     case "demo": {
