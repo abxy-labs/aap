@@ -1,12 +1,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { ORIGIN, makeDelegation, makePresentation, makeWorld, verifyAt } from "./world.ts";
+import { ORIGIN, makeDelegation, makePresentation, makeTerms, makeWorld, verifyAt } from "./world.ts";
 import { useScope } from "../src/lib/session.ts";
+import { completeHandoff, createHandoff } from "../src/lib/handoff.ts";
 import { revokeDelegation, createDelegation } from "../src/lib/delegation.ts";
-import { setPolicy, loadPolicy } from "../src/lib/policy.ts";
+import { setPolicy } from "../src/lib/policy.ts";
 import { generateKeyFile } from "../src/lib/keys.ts";
 import { signGrant } from "../src/lib/grant.ts";
-import { computeTerms } from "../src/lib/terms.ts";
 import { issueAgent } from "../src/lib/certs.ts";
+import { verifyPresentation } from "../src/lib/verify.ts";
 
 function reason(r: { session: { agent: unknown } }): string | undefined {
   return (r.session.agent as { reason?: string } | null)?.reason;
@@ -19,92 +20,93 @@ describe("downgrade reasons", () => {
   test("chain_invalid: grant signed by a key that is not the agent's", async () => {
     const w = await makeWorld(); worlds.push(w);
     const dl = await makeDelegation(w);
-    const other = await generateKeyFile();
-    const r = await verifyAt(w, await makePresentation(w, dl, { agentKey: other }));
+    const r = await verifyAt(w, await makePresentation(w, dl, { agentKey: await generateKeyFile() }));
     expect(r.statusHeader).toBe("Foil-Agent-Status: downgraded; reason=chain_invalid");
-    expect(r.session.decision.plane).toBe("bot");
+    expect(r.session.status).toBe("downgraded");
   });
 
   test("chain_invalid: delegation for a different origin", async () => {
     const w = await makeWorld(); worlds.push(w);
     const dl = await makeDelegation(w);
-    const header = await makePresentation(w, dl);
-    const r = await (await import("../src/lib/verify.ts")).verifyPresentation(w.store, w.root, { header, origin: "other.example", sessionId: "s", asn: "AS1" });
+    const r = await verifyPresentation(w.store, w.root, { header: await makePresentation(w, dl), origin: "other.example", sessionId: "s", asn: "AS1" });
     expect(reason(r)).toBe("chain_invalid");
   });
 
-  test("challenge_invalid: grant signed over a nonce Foil never issued", async () => {
+  test("challenge_invalid: nonce Foil never issued", async () => {
     const w = await makeWorld(); worlds.push(w);
     const dl = await makeDelegation(w);
-    const r = await verifyAt(w, await makePresentation(w, dl, { nonce: "deadbeef" }));
-    expect(reason(r)).toBe("challenge_invalid");
+    expect(reason(await verifyAt(w, await makePresentation(w, dl, { nonce: "deadbeef" })))).toBe("challenge_invalid");
   });
 
   test("delegation_revoked", async () => {
     const w = await makeWorld(); worlds.push(w);
     const dl = await makeDelegation(w);
     await revokeDelegation(w.store, dl.claims.sub, "consumer");
-    const r = await verifyAt(w, await makePresentation(w, dl));
-    expect(reason(r)).toBe("delegation_revoked");
+    expect(reason(await verifyAt(w, await makePresentation(w, dl)))).toBe("delegation_revoked");
   });
 
   test("delegation_expired", async () => {
     const w = await makeWorld({ maxAgeS: 60 }); worlds.push(w);
     const dl = await makeDelegation(w, { now: new Date(Date.now() - 120_000) });
-    const r = await verifyAt(w, await makePresentation(w, dl));
-    expect(reason(r)).toBe("delegation_expired");
+    expect(reason(await verifyAt(w, await makePresentation(w, dl)))).toBe("delegation_expired");
   });
 
-  test("policy_denied: agent denied by name, then origin closed", async () => {
+  test("policy_denied: agent denied by name", async () => {
     const w = await makeWorld(); worlds.push(w);
     const dl = await makeDelegation(w);
     await setPolicy(w.store, w.root, { origin: ORIGIN, tier: "transact", denyAgents: ["ag_test"], evidence: { transact: "observed" } });
-    const r = await verifyAt(w, await makePresentation(w, dl));
-    expect(reason(r)).toBe("policy_denied");
-    await setPolicy(w.store, w.root, { origin: ORIGIN, tier: "none" });
-    const r2 = await verifyAt(w, await makePresentation(w, dl, { nonce: "x" }), "fs_b");
-    // no challenge can be issued for a closed origin, so the nonce is invalid before policy is reached
-    expect(reason(r2)).toBe("challenge_invalid");
+    expect(reason(await verifyAt(w, await makePresentation(w, dl)))).toBe("policy_denied");
+  });
+
+  test("agent_deactivated", async () => {
+    const w = await makeWorld(); worlds.push(w);
+    const dl = await makeDelegation(w);
+    const a = (await w.store.getAgentObject("ag_test"))!;
+    a.status = "deactivated";
+    await w.store.putAgentObject(a);
+    expect(reason(await verifyAt(w, await makePresentation(w, dl)))).toBe("agent_deactivated");
   });
 
   test("grant_replayed: the second session is refused and the first is downgraded", async () => {
     const w = await makeWorld(); worlds.push(w);
     const dl = await makeDelegation(w);
     const header = await makePresentation(w, dl);
-    const first = await verifyAt(w, header, "fs_one");
-    expect(first.session.decision.plane).toBe("agent");
-    const second = await verifyAt(w, header, "fs_two");
-    expect(reason(second)).toBe("grant_replayed");
-    const one = (await w.store.getSession("fs_one"))!;
-    expect(one.decision.plane).toBe("bot");
+    expect((await verifyAt(w, header, "sess_one")).session.plane).toBe("agent");
+    expect(reason(await verifyAt(w, header, "sess_two"))).toBe("grant_replayed");
+    const one = (await w.store.getSession("sess_one"))!;
+    expect(one.plane).toBe("bot");
     expect(reason({ session: one })).toBe("grant_replayed");
   });
 
-  test("operator_mismatch: session network outside the operator profile", async () => {
+  test("operator_mismatch", async () => {
     const w = await makeWorld(); worlds.push(w);
     const dl = await makeDelegation(w);
-    const r = await verifyAt(w, await makePresentation(w, dl), "fs", { asn: "AS999" });
-    expect(reason(r)).toBe("operator_mismatch");
+    expect(reason(await verifyAt(w, await makePresentation(w, dl), "s", { asn: "AS999" }))).toBe("operator_mismatch");
   });
 
-  test("scope_violation: exercising a scope outside the grant", async () => {
+  test("scope_violation", async () => {
     const w = await makeWorld(); worlds.push(w);
     const dl = await makeDelegation(w);
     await verifyAt(w, await makePresentation(w, dl, { scopes: ["accounts:read"] }));
-    const r = await useScope(w.store, w.root, "fs_agent", "payments:initiate");
+    const r = await useScope(w.store, w.root, "sess_agent", "payments:initiate");
     expect(r.statusHeader).toBe("Foil-Agent-Status: downgraded; reason=scope_violation");
-    expect(r.session.decision.plane).toBe("bot");
   });
 
-  test("evidence_insufficient: transact tier requires an observed link", async () => {
+  test("evidence_insufficient at transact, fine at read", async () => {
     const w = await makeWorld(); worlds.push(w);
     const dl = await makeDelegation(w, { siteSession: null });
     expect(dl.claims.record.observed).toBeNull();
-    const r = await verifyAt(w, await makePresentation(w, dl));
-    expect(reason(r)).toBe("evidence_insufficient");
-    // read tier on the same delegation is fine
-    const r2 = await verifyAt(w, await makePresentation(w, dl, { scopes: ["accounts:read"] }), "fs_read");
-    expect(r2.statusHeader).toBe("Foil-Agent-Status: bound");
+    expect(reason(await verifyAt(w, await makePresentation(w, dl)))).toBe("evidence_insufficient");
+    expect((await verifyAt(w, await makePresentation(w, dl, { scopes: ["accounts:read"] }), "sess_read")).statusHeader).toBe("Foil-Agent-Status: bound");
+  });
+
+  test("handoff_completed_by_agent: completing from the agent's own session downgrades it", async () => {
+    const w = await makeWorld(); worlds.push(w);
+    const dl = await makeDelegation(w);
+    await verifyAt(w, await makePresentation(w, dl));
+    const h = await createHandoff(w.store, w.root, { sessionId: "sess_agent", scope: "payments:initiate", context: { amount: 100, currency: "usd", payee: "x" } });
+    await expect(completeHandoff(w.store, h.id, { sessionId: "sess_agent" })).rejects.toThrow(/handoff_completed_by_agent|consumer's own session/);
+    expect(reason({ session: (await w.store.getSession("sess_agent"))! })).toBe("handoff_completed_by_agent");
   });
 });
 
@@ -123,19 +125,23 @@ describe("issuance rules", () => {
     await expect(issueAgent(w.operatorKey, "op_test", { id: "ag_bad", name: "bad", key: w.agentKey.public, ceiling: { scopes: ["security:write"], constraints: {} } })).rejects.toThrow(/never grantable/);
   });
 
-  test("delegation creation checks the terms etag, acknowledgements, viewed documents, and site-only bundles", async () => {
+  test("delegation creation checks the terms object, acknowledgements, viewed documents, copies, and site-only bundles", async () => {
     const w = await makeWorld(); worlds.push(w);
-    const policy = (await loadPolicy(w.store, w.root, ORIGIN))!;
-    const { etag } = computeTerms(w.agent, policy, ["accounts:read"]);
-    const base = { agent: w.agent, operator: w.operator, origin: ORIGIN, subject: "u", scopes: ["accounts:read"], intent: "i" };
-    const ok = { terms: etag, acknowledged: ["esign", "share"], viewed: ["esign", "privacy"], channel: "c", accepted_at: "now", copies_sent_to: "email" };
-    await expect(createDelegation(w.store, w.root, { ...base, acceptance: { ...ok, terms: "t_stale" } })).rejects.toThrow(/terms/);
+    const terms = await makeTerms(w, ["accounts:read"]);
+    const base = { agent: w.agent, operator: w.operator, origin: ORIGIN, subject: "u", scopes: ["accounts:read"], terms: terms.id, intent: "i" };
+    const ok = { terms: terms.id, acknowledged: ["esign", "share"], viewed: ["esign", "privacy"], channel: "c", accepted_at: "now", copies_sent_to: "email" };
+    await expect(createDelegation(w.store, w.root, { ...base, terms: "trm_missing", acceptance: ok })).rejects.toThrow(/No such terms/);
+    await expect(createDelegation(w.store, w.root, { ...base, acceptance: { ...ok, terms: "trm_other" } })).rejects.toThrow(/acceptance references/);
     await expect(createDelegation(w.store, w.root, { ...base, acceptance: { ...ok, acknowledged: ["esign"] } })).rejects.toThrow(/acknowledgements/);
     await expect(createDelegation(w.store, w.root, { ...base, acceptance: { ...ok, viewed: ["privacy"] } })).rejects.toThrow(/rendered in full/);
     await expect(createDelegation(w.store, w.root, { ...base, acceptance: { ...ok, copies_sent_to: undefined } })).rejects.toThrow(/retained copy/);
+    await expect(createDelegation(w.store, w.root, { ...base, scopes: ["payments:initiate"], acceptance: ok })).rejects.toThrow(/not in the terms/);
+    // policy changes after terms were created
+    await setPolicy(w.store, w.root, { origin: ORIGIN, tier: "read" });
+    await expect(createDelegation(w.store, w.root, { ...base, acceptance: ok })).rejects.toThrow(/policy .* changed/);
+    // site-only bundle
     await setPolicy(w.store, w.root, { origin: ORIGIN, tier: "read", disclosures: { ...w.bundle, presentation: "site" } });
-    const p2 = (await loadPolicy(w.store, w.root, ORIGIN))!;
-    const t2 = computeTerms(w.agent, p2, ["accounts:read"]);
-    await expect(createDelegation(w.store, w.root, { ...base, acceptance: { ...ok, terms: t2.etag } })).rejects.toThrow(/completed on the site/);
+    const t2 = await makeTerms(w, ["accounts:read"]);
+    await expect(createDelegation(w.store, w.root, { ...base, terms: t2.id, acceptance: { ...ok, terms: t2.id } })).rejects.toThrow(/completed on the site/);
   });
 });

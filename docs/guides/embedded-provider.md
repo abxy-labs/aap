@@ -35,7 +35,7 @@ Configure your policy as described in [Integrate a site](site.md), for your orig
 
 - Tier ceiling: read.
 - Admitted agents: all vetted operators, with a deny list for exceptions.
-- Handoff scopes: the scope you assigned to the credential or attestation step.
+- Handoffs: the scope you assigned to the credential or attestation step, in `complete` mode, with the URL of the page in your component that hosts it.
 - Evidence for read: asserted.
 - Disclosure bundle: your own data-sharing authorization, with `presentation: app` if you are willing to have it presented by the agent's application, or `presentation: site` if it must be completed in your frame.
 - Disclosure of operator and agent names: enabled, so your fraud team can see them.
@@ -86,13 +86,15 @@ Your server reads the same response a site reads, for the session in your frame.
     "grant": "g_71c",
     "scopes": ["public:read", "accounts:read"],
     "scopes_used": ["public:read"],
-    "delegation": { "id": "dl_8e2", "asserted": { "terms": "t_c41", "acknowledged": ["share"], "channel": "web" }, "observed": null },
-    "handoff": "accounts:read"
-  }
+    "delegation": { "id": "dl_8e2", "issuer": "foil", "asserted": { "terms": "trm_c41", "acknowledged": ["share"], "channel": "web" }, "observed": null, "presented": null },
+    "handoff": "ho_9f3c",
+    "approvals": []
+  },
+  "next_action": { "type": "handoff", "handoff": "ho_9f3c" }
 }
 ```
 
-When `handoff` is set, your frame should behave as it does for any consumer who has reached that step. When the consumer completes it, report the completion so the record reflects it.
+When `next_action` names a handoff, your frame should behave as it does for any consumer who has reached that step. When the consumer completes it, complete the handoff so the record reflects it.
 
 ## What the host sees
 
@@ -100,27 +102,20 @@ Nothing from your frame. The host's own frame is evaluated under the host's poli
 
 ## Test it locally
 
-The `aap` command in the reference implementation can hold two policies at once. Set one for a host origin and one for your origin, create a delegation for each, and verify the same session against both. The following assumes the store, keys, and operator certificate from the [command reference](../cli.md), and issues an agent whose ceiling includes the observe-tier scope used for institution selection.
+The reference API and the `aap` command can hold two origins on one site account. Set one policy for a host origin and one for yours, then use the fixed-outcome test agents to see your frame evaluated under your policy alone. See the [command reference](../cli.md) for the setup.
 
 ```
-aap agent issue --operator-cert operator.cert --operator-key operator.key.json --id ag_link --name link-agent \
-    --key agent.key.json --scopes public:read,accounts:read --out agent.cert
-aap policy set --origin host.example --tier read --evidence read=asserted
-aap policy set --origin widget.example --tier read --evidence read=asserted --handoff accounts:read --disclose operator,agent
-aap terms --agent-cert agent.cert --origin widget.example --scopes public:read,accounts:read
-aap delegation create --agent-cert agent.cert --operator-cert operator.cert --agent-key agent.key.json \
-    --origin widget.example --subject usr_1 --scopes public:read,accounts:read --intent "Connect a bank" \
-    --acceptance acceptance.json --out widget-delegation.cert
-aap challenge --origin widget.example --out widget-challenge.jwt
-aap grant sign --agent-key agent.key.json --agent-cert agent.cert --delegation widget-delegation.cert \
-    --session-ref sess_1 --intent "Connect a bank" --challenge widget-challenge.jwt --out widget-grant.jwt
-aap present --grant widget-grant.jwt --delegation widget-delegation.cert --agent-cert agent.cert --operator-cert operator.cert --out widget-header.txt
-aap verify --header-file widget-header.txt --origin widget.example --session fs_widget
-aap session use fs_widget --scope public:read
-aap session use fs_widget --scope accounts:read
+aap serve                                                                       # in another terminal
+aap accounts create --type site --name "Widget Co"
+aap policies create --origin host.example --tier read --evidence read=asserted
+aap policies create --origin widget.example --tier read --evidence read=asserted --disclose operator,agent \
+    --handoff "scope=accounts:read,mode=complete,url=https://widget.example/connect/sign-in?aap_handoff={id}"
+aap test presentations create --origin widget.example --agent ag_test_bound --scopes public:read,accounts:read
+aap test sessions use sess_… --scope public:read
+aap test sessions use sess_… --scope accounts:read
 ```
 
-The last command prints the handoff header, and `aap site session fs_widget` shows the `handoff` field set. Setting the host origin's tier to `none` and repeating the sequence for the host shows that the host frame receives no challenge while your frame is unaffected.
+The last command returns the session in `requires_handoff` with the handoff it created, whose `url` is your sign-in page with the id filled in. `aap test handoffs complete ho_…` stands in for the consumer completing it, and `aap sessions retrieve sess_…` shows the session active again. Setting the host origin's tier to `none` and running `aap test challenges create --origin host.example` shows that the host frame receives no challenge while your frame is unaffected.
 
 ## Common mistakes
 

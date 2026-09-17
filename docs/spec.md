@@ -57,7 +57,7 @@ The operator certificate and the policy statement are two branches under Foil's 
 
 ### Scopes, tiers, and constraints
 
-Permissions are expressed as scopes from a fixed vocabulary, grouped into tiers. Tiers are ordered, so a site's policy is a single ceiling rather than a list. The tiers are observe, read, manage, transact, and control. The control tier contains changes to credentials and recovery contacts and is never grantable. Scopes in the transact tier carry constraints: a per-transaction amount, a total per delegation, a count, whether new payees may be added, and an expiry. When two parties state a constraint, the more restrictive value applies. The full vocabulary is listed in the [reference](#reference).
+Permissions are expressed as scopes from a fixed vocabulary, grouped into tiers. Tiers are ordered, so a site's policy is a single ceiling rather than a list. The tiers are observe, read, manage, transact, and control. The control tier contains changes to credentials and recovery contacts and is never grantable. Scopes in the transact tier carry constraints: a per-transaction amount, a total per delegation, a count, whether new payees may be added, and an expiry. Amounts are integers in the minor unit of the constraint's currency, so `20000` with `usd` is two hundred dollars. When two parties state a constraint, the more restrictive value applies. The full vocabulary is listed in the [reference](#reference).
 
 Scopes are a ceiling, not a plan. An agent cannot predict every step of a task, so Foil records which scopes a session actually exercised and reports both the granted and the used set to the site. An agent that needs more scope within its delegation signs a new grant. An agent that needs more scope than its delegation allows must obtain a new delegation.
 
@@ -69,8 +69,15 @@ A delegation record contains up to three kinds of evidence, and the protocol kee
 
 ### Disclosures
 
-A site can attach disclosure bundles to its policy, such as an electronic records consent, a privacy notice, or a data-sharing authorization. Each bundle names the documents to present, the acknowledgements the consumer must give, how each document must be rendered, whether a copy must be retained, and which scopes it gates. Foil serves the bundle to the agent's application through the terms endpoint and records the acceptance in the delegation. A site can mark a bundle as requiring completion on the site itself, in which case an application cannot collect the acceptance and the consumer must complete that step on the site.
+A site can attach disclosure bundles to its policy, such as an electronic records consent, a privacy notice, or a data-sharing authorization. Each bundle names the documents to present, the acknowledgements the consumer must give, how each document must be rendered, whether a copy must be retained, and which scopes it gates. Foil serves the bundle to the agent's application as part of the terms and records the acceptance in the delegation. A site can mark a bundle as requiring completion on the site itself, in which case an application cannot collect the acceptance and the consumer must complete that step on the site.
 
+### Handoffs
+
+A handoff is a step the consumer must complete on the site from their own device. It is an object with a lifecycle: pending, then completed, canceled, or expired. A session that needs one changes its status to `requires_handoff` and names the handoff in `next_action`, so every party waits on one id until the consumer finishes.
+
+A handoff has a mode. In `approve` mode the consumer approves the action the agent proposed, and the agent then performs it; the session gains an approval carrying the proposed context, and the site checks the agent's submission against it. In `complete` mode the consumer performs the step on the site and the agent resumes afterward. The site chooses the mode per scope in its policy. Identity verification and site-only disclosures are always `complete`, because nothing an agent can propose stands in for the consumer doing them.
+
+An agent asks for a handoff before it acts, supplying the context the scope defines, such as the amount, currency, and payee of a payment. The handoff carries the site's own URL for the step, from a template in the site's policy, a short code for channels where a link cannot be tapped, and a plain-language message assembled by Foil for the application to show. A session that reaches a handoff scope without asking gets a handoff too, with no context and therefore in `complete` mode.
 
 ## How it works
 
@@ -167,18 +174,21 @@ A policy is configured in the Foil dashboard and takes effect at the next verifi
 3. **Set constraints for transact scopes,** if your ceiling includes them: the maximum amount per transaction, the maximum total per delegation, the maximum count, and whether payments may go only to existing payees.
 4. **Attach disclosure bundles.** Upload the documents, write the acknowledgement text, state how each document must be rendered and whether a copy must be retained, and name the scopes the bundle gates. Mark a bundle as site-only if the acceptance must happen on your site.
 5. **Set evidence requirements per tier.** For each tier, choose whether an asserted acceptance is sufficient, whether an observed link to a live session at your site is required, whether a presented credential is required, or whether the step must be completed on your site by the consumer. The presented level is reserved and cannot be satisfied in the current version.
-6. **Set the maximum delegation age.** Thirty days is a common value.
-7. **Choose what is disclosed to you.** Operator and agent names appear in your verification response only if you enable them. The plane, scopes, and delegation record appear regardless.
-8. **Optionally state credential requirements.** The policy carries a `credentials` field naming the credential types and issuers you accept and the claims you may request. It is empty by default and has no effect until presentations are available.
+6. **Configure handoffs.** For each scope the consumer must complete on your site, choose the mode, `approve` or `complete`, and give the URL of the page on your site that hosts the step, as a template with `{id}` for the handoff id. Identity verification is always a handoff in `complete` mode.
+7. **Set the maximum delegation age.** Thirty days is a common value.
+8. **Choose what is disclosed to you.** Operator and agent names appear in your verification response only if you enable them. The plane, scopes, and delegation record appear regardless.
+9. **Optionally state credential requirements.** The policy carries a `credentials` field naming the credential types and issuers you accept and the claims you may request. It is empty by default and has no effect until presentations are available.
 
 
 ### Read the verification response
 
-The session verification response gains a plane on the decision and an agent block when the plane is agent. Gate each route on the scopes in the response and compare transaction amounts against the constraints.
+The session verification response gains a status, a next action, and an agent block when the plane is agent. Gate each route on the scopes in the response and compare transaction amounts against the constraints. The full object is described in the [API reference](api.md#sessions).
 
 ```
 GET /v1/sessions/{id}
 
+"plane": "agent",
+"status": "active",
 "decision": { "verdict": "allow", "plane": "agent" },
 "agent": {
   "id": "ag_9c4e",
@@ -188,44 +198,65 @@ GET /v1/sessions/{id}
   "intent": "Pay September electric bill",
   "scopes": ["accounts:read", "payments:initiate"],
   "scopes_used": ["accounts:read"],
-  "constraints": { "max_amount": { "value": 200, "currency": "USD" }, "payees": "existing_only" },
+  "constraints": { "currency": "usd", "max_amount": 20000, "payees": "existing_only" },
   "delegation": {
-    "id": "dl_3c9",
+    "id": "dl_1Qx8k2",
     "issuer": "foil",
     "policy_version": 14,
     "created_at": "2026-09-01T14:03:40Z",
     "expires_at": "2026-10-01T14:03:40Z",
     "record": "dr_5e1",
-    "asserted": { "terms": "t_8f1", "acknowledged": ["esign", "share"], "channel": "imessage" },
-    "observed": { "site_session": "fs_2b81", "human": true, "known_device": true, "age_s": 240 },
+    "asserted": { "terms": "trm_3f2a", "acknowledged": ["esign", "share"], "channel": "imessage" },
+    "observed": { "site_session": "sess_2b81", "human": true, "known_device": true, "age_s": 240 },
     "presented": null
   },
-  "handoff": null
-}
+  "handoff": null,
+  "approvals": []
+},
+"next_action": null
 ```
 
 A declared session that failed a check is returned on the bot plane with the reason.
 
 ```
+"plane": "bot",
+"status": "downgraded",
 "decision": { "verdict": "block", "plane": "bot" },
 "agent": { "grant": "g_71c", "reason": "grant_replayed" }
 ```
 
-
 ### Handle a handoff
 
-When an agent reaches a scope that your policy marks as requiring the consumer, the verification response sets the `handoff` field to the scope in question, and Foil tells the operator on the telemetry response. Your site should treat the agent's attempt as incomplete rather than as an error. The consumer completes the step on your site from their own device, where your existing controls apply and where Foil observes a human session. Your server can then report the completion to Foil so that the delegation record reflects it.
+When an agent reaches a scope that your policy marks as requiring the consumer, or asks for confirmation before acting, a handoff is created. The session's status becomes `requires_handoff`, `next_action` names the handoff, and the operator is told on the telemetry response. Your site should treat the agent's attempt as incomplete rather than as an error.
 
+The consumer opens the handoff's URL, which is a page on your site, from their own device. Your page reads the handoff to learn what the agent proposed, renders its own confirmation with your existing step-up controls, and completes the handoff when the consumer confirms. The SDK on that page links the consumer's session to the handoff on its own, so the completion call needs only the id.
+
+```
+GET  /v1/handoffs/{id}
+POST /v1/handoffs/{id}/complete     { "result": { "confirmed": true } }
+```
+
+Foil checks that the completing session is at your origin, was scored human, and is not the agent's session, then returns the agent session to `active`. In `approve` mode the session's agent block gains an approval carrying the context the consumer confirmed, which your server checks the agent's submission against.
 
 ### Revoke a delegation
 
-A site can revoke any delegation at its origin by calling the delegations endpoint with the delegation id. Every grant under that delegation stops being honored at its next telemetry beat. A consumer can revoke through the agent's application, and Foil notifies the operator either way.
+A site can revoke any delegation at its origin. Every grant under that delegation stops being honored at its next telemetry beat, and the operator is notified.
 
+```
+POST /v1/delegations/{id}/revoke
+```
+
+A consumer revokes through the agent's application, and Foil notifies the operator either way.
 
 ### Retain records
 
-The delegation record is available in full, signed by Foil, from the delegations endpoint. It contains the terms version, the document hashes, the acknowledgements, the asserted and observed evidence, the policy version, and the chain to Foil's root key. It can be verified without contacting Foil, so it can be stored in your own compliance system and checked later.
+The delegation record is available in full, signed by Foil, by expanding the `record` field of the delegation.
 
+```
+GET /v1/delegations/{id}?expand[]=record
+```
+
+It contains the terms, the document hashes, the acknowledgements, the asserted and observed evidence, the policy version, and the chain to Foil's root key. It can be verified without contacting Foil, so it can be stored in your own compliance system and checked later.
 
 ## Guide for operators
 
@@ -248,7 +279,7 @@ You issue a certificate for each agent under your operator certificate, without 
   "key": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" },
   "ceiling": {
     "scopes": ["accounts:read", "transactions:read", "payments:initiate"],
-    "constraints": { "max_amount": { "value": 500, "currency": "USD" }, "payees": "existing_only" }
+    "constraints": { "currency": "usd", "max_amount": 50000, "payees": "existing_only" }
   },
   "iss": "op_7a1d",
   "nbf": 1756900000,
@@ -259,19 +290,21 @@ You issue a certificate for each agent under your operator certificate, without 
 
 ### Fetch the terms
 
-Before a consumer authorizes an agent at a site, fetch the terms for that agent at that origin. The response contains the scopes the site will allow for this agent, already intersected with the agent's ceiling and the site's policy, each with a plain-language string; the constraints; the maximum delegation age; and the site's disclosure bundle. The response is cacheable by ETag and changes only when the site's policy changes.
+Before a consumer authorizes an agent at a site, create terms for that agent at that origin. Terms are an object with an id and a one-hour expiry. They contain the scopes the site will allow for this agent, already intersected with the agent's ceiling and the site's policy, each with a plain-language string; the constraints; the maximum delegation age; the evidence rules; and the site's disclosure bundle. The consumer's acceptance references the terms id.
 
 ```
-GET /v1/terms?agent=ag_9c4e&origin=bank.example&scopes=accounts:read,payments:initiate
+POST /v1/terms
+{ "agent": "ag_9c4e", "origin": "bank.example", "scopes": ["accounts:read", "payments:initiate"] }
 
-200  ETag: "t_8f1"
 {
+  "id": "trm_3f2a",
+  "object": "terms",
   "policy_version": 14,
   "scopes": [
     { "id": "accounts:read", "text": "See your accounts and balances" },
-    { "id": "payments:initiate", "text": "Make payments up to $200 to payees you already have" }
+    { "id": "payments:initiate", "text": "Make payments up to $200 each to payees you already have" }
   ],
-  "constraints": { "max_amount": { "value": 200, "currency": "USD" }, "payees": "existing_only" },
+  "constraints": { "currency": "usd", "max_amount": 20000, "payees": "existing_only" },
   "max_age_s": 2592000,
   "evidence": { "read": "asserted", "transact": "observed" },
   "disclosures": {
@@ -285,17 +318,17 @@ GET /v1/terms?agent=ag_9c4e&origin=bank.example&scopes=accounts:read,payments:in
     ],
     "acknowledgements": [
       { "id": "esign", "text": "I agree to receive these documents electronically" },
-      { "id": "share", "text": "I authorize {agent} to access my accounts as described for 30 days" }
+      { "id": "share", "text": "I authorize bill-pay-assistant to access my accounts as described for 30 days" }
     ],
     "retain": "copy_required"
-  }
+  },
+  "expires_at": 1756903600
 }
 ```
 
-
 ### Create a delegation
 
-After the consumer has accepted the terms in the agent's application, post the delegation. The request carries the acceptance evidence and is signed with the agent key. If the consumer is logged in to the site on their own device at the time, include that session's Foil session id, which your local component can read from the SDK's telemetry, and Foil records an observed link. The response returns the delegation certificate and the record.
+After the consumer has accepted the terms in the agent's application, post the delegation. The request carries the acceptance and is signed with the agent key. If the consumer is logged in to the site on their own device at the time, include that session's id, which your local component can read from the SDK's telemetry, and Foil records an observed link. The response is the delegation object, with its certificate.
 
 ```
 POST /v1/delegations
@@ -304,33 +337,33 @@ POST /v1/delegations
   "origin": "bank.example",
   "subject": "usr_41b",
   "scopes": ["accounts:read", "payments:initiate"],
+  "terms": "trm_3f2a",
   "intent": "Pay monthly bills",
   "acceptance": {
-    "terms": "t_8f1",
+    "terms": "trm_3f2a",
     "acknowledged": ["esign", "share"],
     "viewed": ["esign", "privacy"],
     "channel": "imessage",
     "accepted_at": "2026-09-01T14:03:40Z",
     "copies_sent_to": "email"
   },
-  "site_session": "fs_2b81",
-  "chain": ["<agent certificate>", "<operator certificate>"],
+  "site_session": "sess_2b81",
   "signature": "<request signed with the agent key>"
 }
 
-201
 {
-  "delegation": "<delegation certificate>",
-  "id": "dl_3c9",
-  "expires_at": "2026-10-01T14:03:40Z",
+  "id": "dl_1Qx8k2",
+  "object": "delegation",
+  "status": "active",
   "scopes": ["accounts:read", "payments:initiate"],
-  "constraints": { "max_amount": { "value": 200, "currency": "USD" }, "payees": "existing_only" },
-  "record": "dr_5e1"
+  "constraints": { "currency": "usd", "max_amount": 20000, "payees": "existing_only" },
+  "expires_at": 1759492000,
+  "record": "dr_5e1",
+  "certificate": "<delegation certificate>"
 }
 ```
 
 The `subject` field is your own stable identifier for the end user. Foil does not need to know who the consumer is; it binds the subject to the site's customer through the observed session link or through the site's own step-up.
-
 
 ### Sign and present grants
 
@@ -362,7 +395,8 @@ Foil reports on the telemetry response, which your browser already receives. The
 ```
 Foil-Agent-Status: bound
 Foil-Agent-Status: downgraded; reason=grant_replayed
-Foil-Agent-Handoff: required; scope=payments:initiate
+Foil-Agent-Handoff: required; id=ho_4Kq2m
+Foil-Agent-Handoff: completed; id=ho_4Kq2m
 ```
 
 A site or consumer revoking a delegation is reported on the next telemetry response and is also available as an optional webhook.
@@ -393,36 +427,44 @@ The delegation lasts for its maximum age, so a consumer accepts once for each ag
 | manage | `cards:manage` | Lock, unlock, travel notices, and replacements. |
 | manage | `disputes:write` | Filing and following up on disputes. |
 | manage | `support:write` | Secure messages and appointments. |
+| manage | `application:write` | Filling out and submitting an application. |
+| manage | `identity:verify` | Identity proofing: document capture, selfie, liveness. Handoff only: an agent can bring the consumer to this step but never complete it. |
 | transact | `payments:initiate` | Bill payments and card payments. |
 | transact | `transfers:initiate` | Internal, external, and person-to-person transfers. |
 | transact | `payees:write` | Adding or editing payees. |
 | control | `security:write` | Passwords, multi-factor settings, recovery contacts, and login email or phone. Never grantable. |
 
+Scopes that take a handoff define the context an agent supplies when it asks for one. `payments:initiate` requires `amount`, `currency`, and `payee` and accepts `memo` and `date`; `transfers:initiate` requires `amount` and `currency` and accepts `from`, `to`, and `memo`; `payees:write` requires `payee`; `application:write` and `identity:verify` accept `application`.
 
 ### Constraints
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `max_amount` | money | Maximum per transaction. |
-| `max_total` | money | Maximum total across the delegation. |
+| `currency` | string | The three-letter currency of the amounts. |
+| `max_amount` | integer | Maximum per transaction, in the minor unit. |
+| `max_total` | integer | Maximum total across the delegation, in the minor unit. |
 | `max_count` | integer | Maximum number of transactions across the delegation. |
 | `payees` | `existing_only` or `any` | Whether new payees may be added. |
 | `ttl_s` | integer | Expiry in seconds, applied to the delegation or the grant. |
 
-
 ### Endpoints
 
-| Endpoint | Caller | Purpose |
-| --- | --- | --- |
-| `GET /v1/terms` | Operator | Terms for an agent at an origin. Cacheable by ETag. |
-| `POST /v1/delegations` | Operator | Create a delegation from a signed acceptance. |
-| `GET /v1/delegations/{id}` | Operator, site | Status, scopes, expiry, and the signed record. |
-| `DELETE /v1/delegations/{id}` | Operator, site | Revoke. |
-| `POST /v1/sessions/{id}/handoff` | Site | Report that a consumer completed a handoff step. |
-| `GET /v1/sessions/{id}` | Site | The existing verification call, with plane and agent fields. |
-| `GET /v1/directory` | Operator, optional | Hashed list of participating origins. |
-| `GET /.well-known/foil-root` | Anyone | Foil's root public keys. |
+The API is resource-oriented and described in full in the [API reference](api.md). The resources and the verbs on them are the following.
 
+| Resource | Verbs | Who |
+| --- | --- | --- |
+| `agents` | create, retrieve, list, update, deactivate | Operator |
+| `policies` | create, retrieve, list | Site |
+| `terms` | create, retrieve | Operator |
+| `delegations` | create, retrieve, list, revoke | Operator; site for its origins |
+| `sessions` | retrieve, list | Site for its origins; operator for its own grants |
+| `handoffs` | create, retrieve, list, update, complete, cancel | Operator creates and cancels; site completes |
+| `events` | retrieve, list | Either |
+| `webhook_endpoints` | create, retrieve, list, update, delete | Either |
+| `directory` | list | Operator, optional |
+| `/.well-known/foil-root` | | Anyone |
+
+Test mode adds helpers under `/v1/test_helpers/` for consumer sessions, challenges, presentations, scope use, handoff completion, and events.
 
 ### Headers
 
@@ -431,7 +473,7 @@ The delegation lasts for its maximum age, so a consumer accepts once for each ag
 | `Foil-Agent-Challenge` | Telemetry response | A Foil-signed nonce bound to the origin and a time window. Present only for origins whose policy admits agents. |
 | `Foil-Agent-Grant` | Telemetry request | The grant, signed over the challenge, with the chain on first presentation. |
 | `Foil-Agent-Status` | Telemetry response | `bound`, or `downgraded` with a reason. |
-| `Foil-Agent-Handoff` | Telemetry response | `required` with the scope that needs the consumer. |
+| `Foil-Agent-Handoff` | Telemetry response | `required` or `completed`, with the handoff id. |
 
 
 ### Downgrade reasons
@@ -446,6 +488,8 @@ The delegation lasts for its maximum age, so a consumer accepts once for each ag
 | `operator_mismatch` | The session's fingerprint or network does not resemble the operator that issued the grant. |
 | `scope_violation` | The session exercised a scope outside its grant. |
 | `evidence_insufficient` | The tier requires observed evidence and the delegation has only asserted evidence. |
+| `agent_deactivated` | The operator deactivated the agent. |
+| `handoff_completed_by_agent` | A handoff was completed from the agent's own session rather than the consumer's. |
 
 
 ## Security considerations

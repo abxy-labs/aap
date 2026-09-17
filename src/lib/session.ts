@@ -1,61 +1,37 @@
-import type { SessionRecord } from "../types.ts";
+import type { Handoff, SessionRecord } from "../types.ts";
+import { notFound } from "./errors.ts";
+import { createHandoff } from "./handoff.ts";
 import type { KeyFile } from "./keys.ts";
-import { loadPolicy } from "./policy.ts";
+import { handoffConfigFor, loadPolicy } from "./policy.ts";
 import { Store } from "./store.ts";
-import { handoffFor } from "./verify.ts";
+import { downgradeSession } from "./verify.ts";
 
 export interface UseResult {
   session: SessionRecord;
+  handoff?: Handoff;
   statusHeader?: string;
   handoffHeader?: string;
 }
 
-/** Record that a bound session exercised a scope. Outside the grant, the session is downgraded. */
+/** Record that a bound session exercised a scope. A handoff scope creates a handoff; a scope outside the grant downgrades the session. */
 export async function useScope(store: Store, root: KeyFile, sessionId: string, scope: string): Promise<UseResult> {
   const s = await store.getSession(sessionId);
-  if (!s) throw new Error(`session ${sessionId} not found`);
-  if (s.decision.plane !== "agent" || !s.agent || !("scopes" in s.agent)) {
-    return { session: s, statusHeader: `Foil-Agent-Status: downgraded; reason=${"reason" in (s.agent ?? {}) ? (s.agent as { reason: string }).reason : "not_bound"}` };
+  if (!s) throw notFound("session", sessionId);
+  if (s.plane !== "agent" || !s.agent || !("scopes" in s.agent)) {
+    const reason = s.agent && "reason" in s.agent ? s.agent.reason : "not_bound";
+    return { session: s, statusHeader: `Foil-Agent-Status: downgraded; reason=${reason}` };
   }
   if (!s.agent.scopes.includes(scope)) {
-    s.decision = { verdict: "block", plane: "bot" };
-    s.agent = { grant: s.agent.grant, reason: "scope_violation" };
-    await store.putSession(s);
+    await downgradeSession(store, s, "scope_violation", `session exercised ${scope}, which is outside its grant`);
     return { session: s, statusHeader: "Foil-Agent-Status: downgraded; reason=scope_violation" };
   }
-  if (!s.agent.scopes_used.includes(scope)) s.agent.scopes_used.push(scope);
   const policy = await loadPolicy(store, root, s.origin);
-  const handoff = policy ? handoffFor(policy, [scope]) : [];
-  if (handoff.length) {
-    s.agent.handoff = scope;
-    await store.putSession(s);
-    return { session: s, handoffHeader: `Foil-Agent-Handoff: required; scope=${scope}` };
+  if (policy && handoffConfigFor(policy, scope)) {
+    const handoff = await createHandoff(store, root, { sessionId, scope, by: "foil" });
+    const fresh = (await store.getSession(sessionId))!;
+    return { session: fresh, handoff, handoffHeader: `Foil-Agent-Handoff: required; id=${handoff.id}` };
   }
+  if (!s.agent.scopes_used.includes(scope)) s.agent.scopes_used.push(scope);
   await store.putSession(s);
   return { session: s, statusHeader: "Foil-Agent-Status: bound" };
-}
-
-/** POST /v1/sessions/{id}/handoff: the site reports that the consumer completed the step. */
-export async function completeHandoff(store: Store, sessionId: string, scope: string): Promise<SessionRecord> {
-  const s = await store.getSession(sessionId);
-  if (!s) throw new Error(`session ${sessionId} not found`);
-  if (!s.agent || !("scopes" in s.agent)) throw new Error(`session ${sessionId} is not on the agent plane`);
-  if (s.agent.handoff !== scope) throw new Error(`session ${sessionId} is not waiting on a handoff for ${scope}`);
-  s.agent.handoff = null;
-  const d = s.delegation_id ? await store.getDelegation(s.delegation_id) : null;
-  if (d) {
-    const observed = d.claims.record.observed ?? { site_session: "", human: true, known_device: false, age_s: 0 };
-    observed.handoffs = [...(observed.handoffs ?? []), scope];
-    d.claims.record.observed = observed;
-    await store.putDelegation(d);
-    await store.putRecord(d.claims.record);
-    s.agent.delegation.observed = observed;
-  }
-  await store.putSession(s);
-  return s;
-}
-
-/** GET /v1/sessions/{id}: what the site reads. */
-export function verifyResponse(s: SessionRecord): unknown {
-  return { decision: s.decision, agent: s.agent };
 }

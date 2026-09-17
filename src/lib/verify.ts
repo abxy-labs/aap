@@ -1,12 +1,12 @@
-import type { AgentBlock, AgentClaims, DelegationClaims, DowngradeReason, GrantClaims, OperatorClaims, PolicyClaims, SessionRecord, Tier } from "../types.ts";
+import type { AgentBlock, AgentClaims, DelegationClaims, DowngradeReason, DowngradedBlock, GrantClaims, HandoffConfig, OperatorClaims, SessionRecord } from "../types.ts";
 import { verifyAgent, verifyOperator } from "./certs.ts";
 import { intersectConstraints } from "./constraints.ts";
 import { delegationWithinCeiling, verifyDelegation } from "./delegation.ts";
 import { parseHeader } from "./grant.ts";
 import { TYP, decode, nowSeconds, verify } from "./jwt.ts";
 import type { KeyFile } from "./keys.ts";
-import { admitsAgents, agentAllowed, loadPolicy, operatorAllowed } from "./policy.ts";
-import { isSubset, maxTier, tierIndex, tierOf, withinTier } from "./scopes.ts";
+import { admitsAgents, agentAllowed, handoffFor, loadPolicy, operatorAllowed } from "./policy.ts";
+import { isSubset, maxTier, withinTier } from "./scopes.ts";
 import { Store, iso } from "./store.ts";
 
 export interface VerifyInput {
@@ -25,13 +25,34 @@ export interface VerifyResult {
   /** Granted scopes dropped because the site's current policy is tighter than when the delegation was created. */
   narrowed?: string[];
   /** Scopes in the grant that the consumer must complete on the site. */
-  handoffScopes?: string[];
+  handoffs?: Required<HandoffConfig>[];
 }
 
-class Downgrade extends Error {
+export class Downgrade extends Error {
   constructor(public reason: DowngradeReason, message: string) {
     super(message);
   }
+}
+
+export function baseSession(store: Store, id: string, origin: string, now: Date): SessionRecord {
+  return {
+    id, object: "session", created: Math.floor(now.getTime() / 1000), livemode: store.livemode, metadata: {},
+    origin, plane: "bot", status: "downgraded",
+    decision: { verdict: "block", plane: "bot" }, agent: null, next_action: null,
+  };
+}
+
+/** Move a session to the bot plane with a reason. */
+export async function downgradeSession(store: Store, s: SessionRecord, reason: DowngradeReason, message?: string): Promise<SessionRecord> {
+  const grant = s.agent && "grant" in s.agent ? s.agent.grant : s.grant_jti ?? "unknown";
+  const block: DowngradedBlock = { grant, reason, ...(message ? { message } : {}) };
+  s.plane = "bot";
+  s.status = "downgraded";
+  s.decision = { verdict: "block", plane: "bot" };
+  s.agent = block;
+  s.next_action = null;
+  await store.putSession(s);
+  return s;
 }
 
 /** Foil's verification at bind. */
@@ -39,17 +60,17 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
   const now = input.now ?? new Date();
   let grantJti: string | undefined;
   let delegationId: string | undefined;
+  let operatorId: string | undefined;
   try {
     const p = parseHeader(input.header);
 
-    // Resolve the chain. Certificates seen before may be omitted from later presentations.
     const grantClaims = decode<GrantClaims>(p.grant).claims;
     const agentJwt = p.chain.agent ?? (await store.getAgent(grantClaims.iss ?? ""))?.jwt;
     if (!agentJwt) throw new Downgrade("chain_invalid", "presentation omits the agent certificate and Foil has not seen this agent before");
     const agentIss = decode<AgentClaims>(agentJwt).claims.iss;
     const operatorJwt = p.chain.operator ?? (await store.getOperator(agentIss ?? ""))?.jwt;
     if (!operatorJwt) throw new Downgrade("chain_invalid", "presentation omits the operator certificate and Foil has not seen this operator before");
-    const delegationJwt = p.chain.delegation ?? (await store.getDelegation(grantClaims.delegation ?? ""))?.jwt;
+    const delegationJwt = p.chain.delegation ?? (await store.getDelegation(grantClaims.delegation ?? ""))?.certificate;
     if (!delegationJwt) throw new Downgrade("chain_invalid", "presentation omits the delegation and Foil has no record of it");
 
     let operator: OperatorClaims;
@@ -62,6 +83,7 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
     } catch (e) {
       throw new Downgrade("chain_invalid", errMsg(e));
     }
+    operatorId = operator.sub;
     try {
       delegation = await verifyDelegation(delegationJwt, root.public, now);
     } catch (e) {
@@ -82,17 +104,17 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
     if (!delegationWithinCeiling(delegation, agent)) throw new Downgrade("chain_invalid", "delegation exceeds the agent ceiling");
     if (!isSubset(grant.scopes, delegation.scopes)) throw new Downgrade("chain_invalid", "grant scopes are not a subset of the delegation");
 
-    // Challenge
+    const agentObj = await store.getAgentObject(agent.sub);
+    if (agentObj?.status === "deactivated") throw new Downgrade("agent_deactivated", `agent ${agent.sub} was deactivated by its operator`);
+
     const ch = await store.getChallenge(grant.nonce);
     if (!ch || ch.origin !== input.origin) throw new Downgrade("challenge_invalid", "grant was not signed over a challenge Foil issued for this origin");
     if (ch.exp < nowSeconds(now)) throw new Downgrade("challenge_invalid", "challenge has expired");
 
-    // Delegation status
     const stored = await store.getDelegation(delegation.sub);
     if (stored?.status === "revoked") throw new Downgrade("delegation_revoked", `delegation revoked by ${stored.revoked_by} at ${stored.revoked_at}`);
     if (delegation.exp < nowSeconds(now)) throw new Downgrade("delegation_expired", "delegation has passed its maximum age");
 
-    // Current policy
     const policy = await loadPolicy(store, root, input.origin);
     if (!admitsAgents(policy)) throw new Downgrade("policy_denied", `${input.origin} does not admit agents`);
     if (!operatorAllowed(policy, operator.sub)) throw new Downgrade("policy_denied", `operator ${operator.sub} is not admitted`);
@@ -102,7 +124,6 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
     const narrowed = grant.scopes.filter((s) => !effective.includes(s));
     const constraints = intersectConstraints(delegation.constraints, policy.constraints);
 
-    // Evidence requirement for the highest tier in use
     const top = maxTier(effective);
     const required = top === "none" ? undefined : policy.evidence[top];
     if (required === "observed" && !delegation.record.observed) {
@@ -112,19 +133,13 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
       throw new Downgrade("evidence_insufficient", `${top} tier requires a presented credential and the delegation has none`);
     }
 
-    // Replay
     const bound = await store.getGrantBinding(grant.jti);
     if (bound && bound.session !== input.sessionId) {
       const other = await store.getSession(bound.session);
-      if (other) {
-        other.decision = { verdict: "block", plane: "bot" };
-        other.agent = { grant: grant.jti, reason: "grant_replayed" };
-        await store.putSession(other);
-      }
+      if (other) await downgradeSession(store, other, "grant_replayed", `grant ${grant.jti} was presented again by session ${input.sessionId}`);
       throw new Downgrade("grant_replayed", `grant ${grant.jti} was already presented by session ${bound.session}`);
     }
 
-    // Operator profile
     if (operator.profile) {
       if (input.asn && operator.profile.asn && !operator.profile.asn.includes(input.asn)) {
         throw new Downgrade("operator_mismatch", `session network ${input.asn} is not in the operator's profile`);
@@ -134,15 +149,15 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
       }
     }
 
-    // Bind
-    const handoffScopes = handoffFor(policy, effective);
+    const handoffs = handoffFor(policy, effective);
+    const existing = await store.getSession(input.sessionId);
     const block: AgentBlock = {
       ...(policy.disclose.agent ? { id: agent.sub, name: agent.name } : {}),
       ...(policy.disclose.operator ? { operator: operator.sub } : {}),
       grant: grant.jti,
       intent: grant.intent,
       scopes: effective,
-      scopes_used: [],
+      scopes_used: existing?.agent && "scopes_used" in existing.agent ? existing.agent.scopes_used : [],
       constraints,
       delegation: {
         id: delegation.sub,
@@ -160,12 +175,16 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
         presented: delegation.record.presented ?? null,
       },
       handoff: null,
+      approvals: existing?.agent && "approvals" in existing.agent ? existing.agent.approvals : [],
     };
     const session: SessionRecord = {
-      id: input.sessionId,
-      origin: input.origin,
+      ...baseSession(store, input.sessionId, input.origin, now),
+      ...(existing ? { created: existing.created, metadata: existing.metadata } : {}),
+      plane: "agent",
+      status: "active",
       decision: { verdict: "allow", plane: "agent" },
       agent: block,
+      operator_id: operator.sub,
       grant_jti: grant.jti,
       delegation_id: delegation.sub,
       bound_at: now.toISOString(),
@@ -178,38 +197,20 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
       statusHeader: "Foil-Agent-Status: bound",
       session,
       ...(narrowed.length ? { narrowed } : {}),
-      ...(handoffScopes.length ? { handoffScopes } : {}),
+      ...(handoffs.length ? { handoffs } : {}),
     };
   } catch (e) {
     if (!(e instanceof Downgrade)) throw e;
     const session: SessionRecord = {
-      id: input.sessionId,
-      origin: input.origin,
-      decision: { verdict: "block", plane: "bot" },
-      agent: { grant: grantJti ?? "unknown", reason: e.reason },
+      ...baseSession(store, input.sessionId, input.origin, now),
+      agent: { grant: grantJti ?? "unknown", reason: e.reason, message: e.message },
+      ...(operatorId ? { operator_id: operatorId } : {}),
       ...(grantJti ? { grant_jti: grantJti } : {}),
       ...(delegationId ? { delegation_id: delegationId } : {}),
     };
     await store.putSession(session);
     return { statusHeader: `Foil-Agent-Status: downgraded; reason=${e.reason}`, session };
   }
-}
-
-export function handoffFor(policy: PolicyClaims, scopes: string[]): string[] {
-  return scopes.filter((s) => {
-    if (policy.handoff.includes(s)) return true;
-    const t = tierOf(s);
-    return t !== undefined && policy.evidence[t] === "site";
-  });
-}
-
-export function requiredEvidenceFor(policy: PolicyClaims, scope: string): string | undefined {
-  const t = tierOf(scope);
-  return t ? policy.evidence[t] : undefined;
-}
-
-export function tierAtLeast(a: Tier | "none", b: Tier | "none"): boolean {
-  return tierIndex(a) >= tierIndex(b);
 }
 
 function errMsg(e: unknown): string {
