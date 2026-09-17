@@ -64,7 +64,7 @@ Scopes are a ceiling, not a plan. An agent cannot predict every step of a task, 
 
 ### Asserted, observed, and presented evidence
 
-A delegation record contains up to three kinds of evidence, and the protocol keeps them separate. Evidence that is **asserted** comes from the agent's application, signed with the agent key: which terms were shown, which acknowledgements the consumer gave, in what channel, and when. Evidence that is **observed** comes from Foil's own presence on the site: a live session at the site for the same consumer on a device Foil has seen before, scored human, and its age at the time the delegation was created. Evidence that is **presented** comes from a verifiable credential the consumer presented from their own wallet, verified against its issuer and bound to the holder's key; it is reserved in the current version and described in [Planned: verifiable credentials](#planned-verifiable-credentials). A site's policy states which kind of evidence each tier requires.
+A delegation record contains up to three kinds of evidence, and the protocol keeps them separate. Evidence that is **asserted** comes from the agent's application, signed with the agent key: which terms were shown, which acknowledgements the consumer gave, in what channel, and when. Evidence that is **observed** comes from Foil's own presence on the site: a live session at the site for the same consumer on a device Foil has seen before, scored human, and its age at the time the delegation was created. Evidence that is **presented** is reserved for verified credentials accepted under the site's issuer and claim policy, with subject and presentation bindings checked. Consumer-held presentations and business-submitted evidence must retain their distinct assurance properties; a business submission is not proof of a consumer-held key. This capability is not implemented in the current version; see [Planned: verifiable credentials](#planned-verifiable-credentials). A site's policy states which kind of evidence each tier requires.
 
 
 ### Disclosures
@@ -514,7 +514,13 @@ The current version presents the grant on the SDK's telemetry channel, which req
 
 ## Planned: verifiable credentials
 
-A verifiable credential is a statement about a person, signed by an issuer such as a motor vehicle agency or a government wallet program, held in the person's wallet, and presented under a key only the holder controls. The protocol reserves three places for it, and each is present in the current version as an empty field so that adding the capability changes no existing behavior.
+The planned integration adopts [W3C Verifiable Credentials Data Model 2.0](https://www.w3.org/TR/vc-data-model-2.0/), initially targeting the JOSE/JWT securing path in [Securing Verifiable Credentials using JOSE and COSE](https://www.w3.org/TR/vc-jose-cose/). AAP does not define a competing signed-attestation format. The implementation profile must still select supported algorithms, claim schemas, trusted key resolution, status handling, and the presentation exchange. Existing AAP authorization certificates, grants, and challenges are unchanged. Native VC issuance, presentation, and verification are not implemented in the reference API.
+
+An attestation issuer is a role available to both specialist identity/risk providers and businesses checking their own users, including agent applications, browser operators, and institutions. An application may attest that it verified control of an email address or phone number; an identity provider may attest to a more extensive identity check. Those are different claims, not interchangeable assurance levels. The receiving institution decides which issuers, claims, methods, and freshness it accepts for each action. Authenticating an issuer's signature does not make its claims true, grant permissions, or establish customer consent. See [Issue identity and risk credentials](guides/identity-risk-provider.md).
+
+An issuer can sign its own VC using its authorized key. As an optional future convenience, Foil could issue a separate VC recording that an authenticated business reported a check, explicitly identifying that business. Such a receipt is not independent verification by Foil and cannot satisfy a requirement for a specialist provider's signature. Provider credentials retain their original issuer and proof; trust must not be silently upgraded by relaying or re-signing them.
+
+The protocol reserves three places for credential integration, each present in the current version as an empty field. The existing type definitions are placeholders and do not fully specify the future verification contract.
 
 First, a presentation is a third kind of evidence in the delegation record, called presented, alongside asserted and observed. A site can require it per tier in the same setting it uses for the other two. It is the evidence that fits onboarding, where there is no prior session to observe and no account to sign in to.
 
@@ -522,7 +528,13 @@ Second, the consumer can be the delegation's issuer. The acceptance, with its te
 
 Third, the delegation's subject can be a credential-bound identifier for the site, or selectively disclosed claims the site's policy requests, encrypted to the verifier. The policy's `credentials` field names the accepted credential types and issuers and the claims that may be requested.
 
-The presentation happens on the consumer's device, where the acceptance already happens, through the presentation protocol the wallet supports. Foil acts as the registered verifier for every site under it, verifies the issuer signature, the holder binding, and the credential's status, and records the result in the delegation. The operator and the application never see the claims. Grants, challenges, the header, and binding are unchanged.
+In the proposed integration, Foil verifies credentials for an institution under that institution's policy. A consumer-held credential can be presented from the consumer's device through an agreed standard presentation mechanism with holder-key proof. A business can also submit evidence through its authenticated backend, but this does not establish customer holder-key possession. Preserve that distinction in the verification result; never infer `holder_bound` from the issuer's signature. Issuers, holders, subjects, and verifiers are separate roles even when one organization performs several of them.
+
+Before accepting evidence, the verifier must check the VC structure and proof, issuer/key authorization, permitted claims and methods, validity and check freshness, required status, and subject binding to the customer/delegation. The presentation must be bound to the intended verifier and a fresh challenge, with replay protection. A VC signature or a bare subject identifier is insufficient to establish those bindings. Exact exchange and binding rules are required before implementation; the existing policy fields do not enforce them today.
+
+Transmit only the claims needed for the decision, with confidential values encrypted to the authorized verifier when carried by an intermediary. Signing is not encryption; do not put credentials or personal claims in the browser-visible grant header or shared handoff results. For a check on a specific email address or phone number, the signed evidence must bind that value or an authorized resolvable reference, not merely assert a generic boolean. Credential status changes and ongoing risk updates require explicit revalidation and access decisions, not an assumption that they automatically revoke a delegation.
+
+Today's institution-completed handoff can carry an opaque reference to externally validated evidence. That application-defined result is not a VC or `presented` evidence, and does not demonstrate native credential verification. The guide retains this working fallback separately from the planned standards-based integration.
 
 ## Limitations
 
@@ -547,4 +559,3 @@ The presentation happens on the consumer's device, where the acceptance already 
 - **Plane.** The category assigned to a session: human, agent, or bot.
 - **Policy.** A site's statement of which agents it admits, what they may do, and what a consumer must be shown.
 - **Tier.** An ordered group of scopes: observe, read, manage, transact, control.
-

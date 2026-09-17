@@ -1,8 +1,10 @@
 # Integrate an operator
 
 Third-party evidence about your operator is covered in
-[Integrate an identity and risk provider](identity-risk-provider.md). Operator
-attestations and customer verification results describe different subjects.
+[Issue identity and risk credentials](identity-risk-provider.md). You can also be
+an issuer for checks you perform on your own users; a receiving institution decides
+which claims it accepts from you. Operator attestations and customer verification
+results describe different subjects.
 
 This guide is for a company that runs browsers for agents and controls those browsers at the network layer. It covers registering with Foil, issuing certificates for your agents, answering challenges, signing grants, injecting the header, reading the feedback Foil returns, and the optional pieces: the local component for session transfer and the directory. When you finish, sessions from your agents arrive on the agent plane at sites that admit them, and nothing about your sessions changes at sites that do not.
 

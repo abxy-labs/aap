@@ -16,7 +16,7 @@ Three properties hold throughout. Foil never presents an interface to a consumer
   - [Integrate an operator](docs/guides/operator.md), for a company that runs browsers for agents.
   - [Integrate an agent application](docs/guides/agent-app.md), for the product a consumer talks to.
   - [Integrate an embedded provider](docs/guides/embedded-provider.md), for a component that runs inside other companies' flows.
-  - [Integrate an identity and risk provider](docs/guides/identity-risk-provider.md), for a provider that issues attestations used in agent-led flows.
+  - [Issue identity and risk credentials](docs/guides/identity-risk-provider.md), for specialist providers and businesses checking their own users; covers the proposed W3C VC integration and today's reference flow.
 - [examples/lifecycle.sh](examples/lifecycle.sh): every command in order against a running reference API.
 
 ## Quick start

@@ -74,11 +74,11 @@ aap policies create --origin bank.example --tier read --disclosures @bundle.json
 
 ## Resources
 
-For an identity or risk provider integration, see
-[Integrate an identity and risk provider](guides/identity-risk-provider.md).
-It shows how an institution can record an externally validated attestation
-reference in a handoff result using the existing commands, and distinguishes
-that from the planned customer-credential verification flow.
+For specialist providers or businesses attesting to checks on their own users,
+see [Issue identity and risk credentials](guides/identity-risk-provider.md).
+It describes the proposed W3C VC integration and shows how an institution can
+record an externally validated evidence reference using existing handoff commands.
+The CLI does not yet issue, present, or verify W3C credentials.
 
 Every resource supports `create`, `retrieve ID`, and `list`, plus the verbs shown. Arguments after the verb are the id; everything else is a flag.
 
