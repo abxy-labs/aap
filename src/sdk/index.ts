@@ -1,6 +1,7 @@
 import type { JWK } from "jose";
 import { issueAgent, verifyOperator } from "../lib/certs.ts";
 import { verifyChallenge } from "../lib/challenge.ts";
+import { discover, type DiscoveryOptions } from "../lib/discovery.ts";
 import { delegationSigningPayload, signRequest, verifyDelegation } from "../lib/delegation.ts";
 import { constructEvent } from "../lib/events.ts";
 import { buildHeader, signGrant } from "../lib/grant.ts";
@@ -95,6 +96,11 @@ export class Aap {
 
   get livemode(): boolean {
     return !!this.apiKey?.startsWith("sk_live_");
+  }
+
+  /** Public discovery only. Never forwards this client's API key or changes its service. */
+  discover(origin: string, opts: DiscoveryOptions = {}) {
+    return discover(origin, { ...opts, fetch: this.fetchImpl });
   }
 
   async request<T>(method: string, path: string, params: Params = {}, opts: RequestOptions = {}): Promise<T> {
@@ -324,4 +330,6 @@ export class Aap {
 }
 
 export type { KeyFile } from "../lib/keys.ts";
+export { discover, createDiscoveryProfile, validateDiscoveryProfile } from "../lib/discovery.ts";
+export type { DiscoveryProfile, DiscoveryOptions } from "../lib/discovery.ts";
 export { generateKeyFile, readKeyFile } from "../lib/keys.ts";

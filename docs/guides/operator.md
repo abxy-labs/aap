@@ -1,5 +1,9 @@
 # Integrate an operator
 
+## Discover a site's service
+
+Use `aap discovery retrieve https://bank.example` or the SDK's `discover(origin)` to read a site's optional `/.well-known/aap` document. It locates the service and lists its capabilities. It does not send your API key, switch your configured service, or grant anything. Onboard with the advertised service and use the API keys it issues before requesting terms. Explicit service configuration and the signed-challenge flow work without public discovery. See [Site discovery](../discovery.md).
+
 This guide is for a company that runs browsers for agents and controls those browsers at the network layer. It covers registering with Foil, issuing certificates for your agents, answering challenges, signing grants, injecting the header, reading the feedback Foil returns, and the optional pieces: the local component for session transfer and the directory. When you finish, sessions from your agents arrive on the agent plane at sites that admit them, and nothing about your sessions changes at sites that do not.
 
 The guide assumes you have read the [Key concepts](../spec.md#key-concepts) and [How it works](../spec.md#how-it-works) sections of the specification. The application that puts your agents in front of consumers has its own guide, [Integrate an agent application](agent-app.md), and this guide points to it where the two meet.
@@ -200,13 +204,19 @@ A delegation created this way carries observed evidence, which is what sites req
 
 ## Step 10: Cache the directory
 
-The directory is a hashed list of origins whose policy admits agents. It is optional. With it cached, you can present the grant on the first telemetry request from a participating origin instead of waiting for the challenge on the first response, which saves one telemetry beat at the start of a session. Sync it by ETag and hash origins with SHA-256 of the lowercase origin to check membership.
+The directory is an optional hashed list of origins whose policy admits agents.
+Hash origins with SHA-256 of the lowercase origin to check membership. It is a
+participation hint only: obtain a fresh, origin-bound signed challenge before
+presenting a grant. The reference directory does not implement ETag caching;
+the public `/.well-known/aap` document does, for endpoint/capability discovery.
 
 ```
 GET /v1/directory
 ```
 
-The directory also lets you verify the confidentiality guarantee yourself, since an origin absent from it never receives a presentation from you regardless of what it sends.
+Treat the cached directory as a hint that may become stale. A known domain's hash
+can be tested by anyone with the list. The signed challenge, not the hash, is the
+proof required before the browser sends a grant to the configured Foil service.
 
 ## Step 11: Handle expiry and revocation
 

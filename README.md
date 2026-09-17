@@ -56,6 +56,22 @@ await notifyConsumer(handoff.display.message, handoff.url);
 const done = await aap.handoffs.wait(handoff.id, { timeout: 900 });
 ```
 
+## Site discovery
+
+A site can publish `/.well-known/aap` with their protocol versions, API
+service, endpoints, and optional capabilities. Discovery never automatically
+sends API credentials, changes a configured service, or trusts an attestation issuer.
+
+```sh
+aap discovery create --origin https://bank.example --api-base https://aap.example --out aap.json
+aap discovery retrieve https://bank.example
+```
+
+Serve the generated file on the site's domain. See
+[Site discovery](docs/discovery.md) for the profile, SDK usage,
+reference-server hosting, and a local walkthrough. Existing explicit
+configuration and challenge-based participation remain supported.
+
 ## Repository layout
 
 ```

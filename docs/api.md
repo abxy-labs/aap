@@ -1,5 +1,16 @@
 # API reference
 
+## Public site discovery
+
+A site can serve unauthenticated `GET /.well-known/aap` on its own
+origin, pointing to this API. See [Site discovery](discovery.md) for the
+versioned document and SDK/CLI integration. The reference server serves it only
+when explicitly configured with a profile. It supports HEAD and conditional GET,
+five-minute public caching, ETags, and public CORS. Discovery does not expose
+policies, require credentials, or replace authorization. The authenticated
+`GET /v1/directory` remains an optional hashed participation list, and
+`GET /.well-known/foil-root` remains the configured service's key endpoint.
+
 The Agent Admission Protocol API is a resource-oriented HTTP API with JSON request and response bodies. Operators use it to register agents, fetch terms, create delegations, and manage handoffs. Sites use it to configure policies, read sessions, and complete handoffs. Both use it to receive events. Everything that involves a signing key happens on your machine, through the SDK or the command line; the API only ever sees public keys and signed objects.
 
 This document describes the API as served by the reference implementation in this repository. Run it with `aap serve`. The base URL in the examples is `http://127.0.0.1:4010`.
@@ -528,7 +539,7 @@ Deliveries that fail are not retried by the reference server. Read `pending_webh
 GET /v1/directory
 ```
 
-Operators may read the hashed list of origins whose current policy admits agents, each as the SHA-256 of the lowercase origin. It is optional. With it cached, a browser can present its grant on the first telemetry request from a participating origin instead of waiting for the challenge on the first response, and an operator can confirm for itself that a non-participating origin never receives a presentation.
+Operators may read the hashed list of origins whose current policy admits agents, each as the SHA-256 of the lowercase origin. It is an optional participation hint, not endpoint discovery or proof of current authorization. A directory hit does not replace a fresh, origin-bound signed challenge. For site-hosted endpoint and capability discovery, see [Site discovery](discovery.md).
 
 ## Root key
 
