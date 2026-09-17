@@ -2,8 +2,8 @@ import { mkdir, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { KeyFile } from "./keys.ts";
 import type {
-  Account, AgentObject, ApiKeyRecord, DelegationRecord, EventObject, Handoff, OperatorObject,
-  PolicyObject, SessionRecord, StoredDelegation, TermsObject, WebhookEndpoint,
+  Account, AgentObject, ApiKeyRecord, Attestation, DelegationRecord, EventObject, Handoff, IssuerObject,
+  OperatorObject, PolicyObject, SessionRecord, StoredDelegation, TermsObject, WebhookEndpoint,
 } from "../types.ts";
 
 export interface StoredChallenge {
@@ -116,6 +116,10 @@ export class Store {
   listAccounts() { return this.list<Account>("accounts", true); }
   putKey(k: ApiKeyRecord) { return this.put("keys", k.hash, k, true); }
   getKey(hash: string) { return this.get<ApiKeyRecord>("keys", hash, true); }
+  putIssuer(i: IssuerObject) { return this.put("issuers", i.id, i, true); }
+  getIssuer(id: string) { return this.get<IssuerObject>("issuers", id, true); }
+  listIssuers() { return this.list<IssuerObject>("issuers", true); }
+
   putOperatorObject(o: OperatorObject) { return this.put("operators", o.id, o, true); }
   getOperatorObject(id: string) { return this.get<OperatorObject>("operators", id, true); }
   listOperators() { return this.list<OperatorObject>("operators", true); }
@@ -169,6 +173,11 @@ export class Store {
   listDelegations() { return this.list<StoredDelegation>("delegations"); }
   putRecord(r: DelegationRecord) { return this.put("records", r.id, r); }
   getRecord(id: string) { return this.get<DelegationRecord>("records", id); }
+
+  // attestations
+  putAttestation(a: Attestation) { return this.put("attestations", a.id, a); }
+  getAttestation(id: string) { return this.get<Attestation>("attestations", id); }
+  listAttestations() { return this.list<Attestation>("attestations"); }
 
   // challenges
   putChallenge(c: StoredChallenge) { return this.put("challenges", c.nonce, c); }

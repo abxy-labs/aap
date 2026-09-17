@@ -9,8 +9,8 @@ export interface Profile {
   test_key?: string;
   live_key?: string;
   account?: string;
-  account_type?: "operator" | "site";
-  keys?: { operator?: string; agents?: Record<string, string> };
+  account_type?: "operator" | "site" | "issuer";
+  keys?: { operator?: string; issuer?: string; agents?: Record<string, string> };
 }
 
 export interface Config {
@@ -54,7 +54,7 @@ export function getProfile(c: Config, name?: string): { name: string; profile: P
   return { name: n, profile: c.profiles[n] ?? {} };
 }
 
-export async function saveKeyFile(profileName: string, kind: "operator" | "agent", id: string, key: KeyFile): Promise<string> {
+export async function saveKeyFile(profileName: string, kind: "operator" | "agent" | "issuer", id: string, key: KeyFile): Promise<string> {
   const dir = join(configDir(), "keys", profileName);
   await mkdir(dir, { recursive: true });
   const path = join(dir, `${kind}.${id.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
@@ -67,6 +67,10 @@ export async function loadKeyring(profile: Profile): Promise<Keyring> {
   if (profile.keys?.operator) {
     const f = Bun.file(profile.keys.operator);
     if (await f.exists()) ring.operator = (await f.json()) as KeyFile;
+  }
+  if (profile.keys?.issuer) {
+    const f = Bun.file(profile.keys.issuer);
+    if (await f.exists()) ring.issuer = (await f.json()) as KeyFile;
   }
   for (const [id, path] of Object.entries(profile.keys?.agents ?? {})) {
     const f = Bun.file(path);

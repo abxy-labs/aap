@@ -1,5 +1,6 @@
 import type { Handoff, SessionRecord } from "../types.ts";
 import { notFound } from "./errors.ts";
+import { attestedTiers, satisfiesAttested } from "./attestations.ts";
 import { createHandoff } from "./handoff.ts";
 import type { KeyFile } from "./keys.ts";
 import { handoffConfigFor, loadPolicy } from "./policy.ts";
@@ -26,6 +27,14 @@ export async function useScope(store: Store, root: KeyFile, sessionId: string, s
     return { session: s, statusHeader: "Foil-Agent-Status: downgraded; reason=scope_violation" };
   }
   const policy = await loadPolicy(store, root, s.origin);
+  if (policy && s.delegation_id && attestedTiers([scope], policy).length) {
+    const evidence = await satisfiesAttested(store, s.delegation_id, policy);
+    if (!evidence) {
+      await downgradeSession(store, s, "evidence_insufficient", `${scope} requires an attestation this site accepts, and none on this delegation is current`);
+      return { session: s, statusHeader: "Foil-Agent-Status: downgraded; reason=evidence_insufficient" };
+    }
+    s.agent.delegation.attested = [evidence, ...s.agent.delegation.attested.filter((e) => e.attestation !== evidence.attestation)];
+  }
   if (policy && handoffConfigFor(policy, scope)) {
     const handoff = await createHandoff(store, root, { sessionId, scope, by: "foil" });
     const fresh = (await store.getSession(sessionId))!;

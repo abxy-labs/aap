@@ -62,10 +62,34 @@ Permissions are expressed as scopes from a fixed vocabulary, grouped into tiers.
 Scopes are a ceiling, not a plan. An agent cannot predict every step of a task, so Foil records which scopes a session actually exercised and reports both the granted and the used set to the site. An agent that needs more scope within its delegation signs a new grant. An agent that needs more scope than its delegation allows must obtain a new delegation.
 
 
-### Asserted, observed, and presented evidence
+### Kinds of evidence
 
-A delegation record contains up to three kinds of evidence, and the protocol keeps them separate. Evidence that is **asserted** comes from the agent's application, signed with the agent key: which terms were shown, which acknowledgements the consumer gave, in what channel, and when. Evidence that is **observed** comes from Foil's own presence on the site: a live session at the site for the same consumer on a device Foil has seen before, scored human, and its age at the time the delegation was created. Evidence that is **presented** comes from a verifiable credential the consumer presented from their own wallet, verified against its issuer and bound to the holder's key; it is reserved in the current version and described in [Planned: verifiable credentials](#planned-verifiable-credentials). A site's policy states which kind of evidence each tier requires.
+A delegation record can carry four kinds of evidence, and the protocol keeps them separate, because they are not equally strong.
 
+Evidence that is **asserted** comes from the agent's application, signed with the agent key: which terms were shown, which acknowledgements the consumer gave, in what channel, and when.
+
+Evidence that is **observed** comes from Foil's own presence on the site: a live session at the site for the same consumer on a device Foil has seen before, scored human, and its age at the time the delegation was created.
+
+Evidence that is **attested** comes from a third party who checked something about the consumer and signed a statement saying so, such as an identity provider confirming an identity document or an application confirming that the consumer controls an email address. It is a statement by an issuer the site has chosen to accept, not proof from the consumer, and it is described in [Attestations](#attestations).
+
+Evidence that is **presented** comes from a verifiable credential the consumer presents from their own wallet, under a key only they hold. It is stronger than an attestation, because the consumer proves possession rather than a third party vouching. It is reserved in the current version and described in [Planned: consumer-held credentials](#planned-consumer-held-credentials).
+
+A site's policy states which kind of evidence each tier requires.
+
+
+### Attestations
+
+An attestation is a statement about the consumer, signed by an issuer, recorded against a delegation. It exists because some actions need more than the consumer's consent: opening an account may require an identity check, and a payment may require knowing that the consumer controls the email address on file.
+
+The statement is a W3C verifiable credential, serialized as a JWT, signed with the issuer's own key. The subject is the delegation, written as a pseudonymous identifier built from the operator and its own identifier for the end user, so no issuer needs the consumer's identity to write one. Claims are flat values.
+
+Two kinds of issuer can write one, and both produce the same object. An **identity or risk provider** registers with Foil, which holds its public keys, and sites name it in their policy. An **agent application** signs with the agent key it already has, for checks it performed itself, and a site admits those by naming `operator` in its policy, which covers the delegation's own operator and its agents.
+
+A credential reaches the site by one of two paths, whichever suits the parties. An operator that already holds one attaches it when it creates the delegation, so the site needs no exchange with anyone. A provider that would rather deliver its own posts it against the delegation id it was given. Foil verifies the signature against the keys registered for the issuer the credential names, checks the subject, the type, the required claims, and the age against the site's policy, and records an attestation. Only the claims the site's policy names are kept; everything else in the credential is discarded, and the credential itself is not retained.
+
+An attestation stops satisfying a policy when it is revoked by the site or the issuer, when its validity passes, or when the site tightens its policy past what the attestation carries. Sessions are checked at binding and again at each scope use, so revocation takes effect without waiting for the delegation to expire.
+
+Attestations are optional. A site that requires none is unaffected, and a site that configures which it accepts still requires none until a tier's evidence level says `attested`.
 
 ### Disclosures
 
@@ -183,11 +207,11 @@ A policy is configured in the Foil dashboard and takes effect at the next verifi
 2. **Choose which operators and agents are admitted.** You can admit all vetted operators, specific operators, or specific agents by name. A denied agent is denied without affecting the rest of its operator's agents.
 3. **Set constraints for transact scopes,** if your ceiling includes them: the maximum amount per transaction, the maximum total per delegation, the maximum count, and whether payments may go only to existing payees.
 4. **Attach disclosure bundles.** Upload the documents, write the acknowledgement text, state how each document must be rendered and whether a copy must be retained, and name the scopes the bundle gates. Mark a bundle as site-only if the acceptance must happen on your site.
-5. **Set evidence requirements per tier.** For each tier, choose whether an asserted acceptance is sufficient, whether an observed link to a live session at your site is required, whether a presented credential is required, or whether the step must be completed on your site by the consumer. The presented level is reserved and cannot be satisfied in the current version.
+5. **Set evidence requirements per tier.** For each tier, choose whether an asserted acceptance is sufficient, whether an observed link to a live session at your site is required, whether an attestation from an issuer you accept is required, or whether the step must be completed on your site by the consumer. The `presented` level, a credential from the consumer's own wallet, is reserved.
 6. **Configure handoffs.** For each scope the consumer must complete on your site, choose the mode, `approve` or `complete`, and give the URL of the page on your site that hosts the step, as a template with `{id}` for the handoff id. Identity verification is always a handoff in `complete` mode.
 7. **Set the maximum delegation age.** Thirty days is a common value.
 8. **Choose what is disclosed to you.** Operator and agent names appear in your verification response only if you enable them. The plane, scopes, and delegation record appear regardless.
-9. **Optionally state credential requirements.** The policy carries a `credentials` field naming the credential types and issuers you accept and the claims you may request. It is empty by default and has no effect until presentations are available.
+9. **Optionally accept attestations.** The policy's `attestations` field names the issuers you accept, the credential types, the claims a credential must carry, and optionally how recently it must have been issued. It is empty by default, and configuring it requires nothing until a tier's evidence level says `attested`.
 
 
 ### Read the verification response
@@ -522,15 +546,15 @@ Test mode adds helpers under `/v1/test_helpers/` for consumer sessions, challeng
 The current version presents the grant on the SDK's telemetry channel, which requires that the SDK be running on a page. A planned extension lets a site's edge issue the same challenge on HTTP responses, so that an agent can present its chain on the request that follows, before any page loads, and so that requests without a page, such as API calls, can be covered. The challenge and the presentation are the same objects; only the channel differs. On the edge channel the answer is an HTTP Message Signature over the request with the challenge as a covered component, which is the format Web Bot Auth uses, with the grant and chain carried in the same header as on the telemetry channel. An operator that has implemented Web Bot Auth signing reuses it and changes only when it signs. The edge verifies the chain, removes the presentation, and forwards the request to the origin with the plane and scopes. Because the edge has network-level evidence but not yet behavioral evidence, its verdict is provisional until the SDK binds, and the verification response will state which of the two a site is reading.
 
 
-## Planned: verifiable credentials
+## Planned: consumer-held credentials
 
-A verifiable credential is a statement about a person, signed by an issuer such as a motor vehicle agency or a government wallet program, held in the person's wallet, and presented under a key only the holder controls. The protocol reserves three places for it, and each is present in the current version as an empty field so that adding the capability changes no existing behavior.
+[Attestations](#attestations) cover a credential signed by an issuer and submitted by a business. A credential the consumer holds themselves is stronger, because the consumer proves possession of a key rather than a third party vouching on their behalf, and the protocol reserves three places for it.
 
-First, a presentation is a third kind of evidence in the delegation record, called presented, alongside asserted and observed. A site can require it per tier in the same setting it uses for the other two. It is the evidence that fits onboarding, where there is no prior session to observe and no account to sign in to.
+First, a presentation is the `presented` evidence level, alongside asserted, observed, and attested. A site can require it per tier in the same setting it uses for the others. It is the evidence that fits onboarding, where there is no prior session to observe and no account to sign in to, and where a consumer holding a government wallet credential can skip a capture step entirely.
 
 Second, the consumer can be the delegation's issuer. The acceptance, with its terms version, acknowledgements, scopes, and expiry, becomes a request the consumer's wallet signs, and the delegation is consumer-signed and Foil-countersigned for the observed facts. The delegation certificate's `issuer` field records this, and is `foil` today. A consumer-signed delegation has the same shape as a payment mandate: a subject, a counterparty, limits, and an expiry, signed by the person's own key. A delegation whose scopes include money movement can carry or reference a payment mandate issued under a payment protocol, so that the site's authorization and the network's authorization describe the same act.
 
-Third, the delegation's subject can be a credential-bound identifier for the site, or selectively disclosed claims the site's policy requests, encrypted to the verifier. The policy's `credentials` field names the accepted credential types and issuers and the claims that may be requested.
+Third, the delegation's subject can be a credential-bound identifier for the site, or selectively disclosed claims the site's policy requests, encrypted to the verifier. The reserved `credentials` field on the policy names the accepted credential types and issuers and the claims that may be requested, separately from the `attestations` field that governs issuer-signed statements.
 
 The presentation happens on the consumer's device, where the acceptance already happens, through the presentation protocol the wallet supports. Foil acts as the registered verifier for every site under it, verifies the issuer signature, the holder binding, and the credential's status, and records the result in the delegation. The operator and the application never see the claims. Grants, challenges, the header, and binding are unchanged.
 
@@ -538,7 +562,7 @@ The presentation happens on the consumer's device, where the acceptance already 
 
 - The protocol requires the Foil SDK on the pages an agent visits. Requests that do not load a page are not covered until the edge challenge is available.
 - Foil is the issuer of delegation certificates in the current version. Site-issued and consumer-issued delegations are designed for but not yet available.
-- Verifiable credential presentations are reserved as an evidence level and a policy field but cannot yet be recorded.
+- Attestations are statements by an issuer, submitted by a business. A credential held and presented by the consumer, which is the `presented` evidence level, is reserved and cannot yet be recorded.
 - The scope vocabulary is oriented to financial services. Sites in other categories may find it incomplete, and additions are made to the shared vocabulary rather than per site.
 - A session driven by a browser's own built-in assistant, on the consumer's own device, is not yet distinguished from a human session.
 - Endpoint names, header names, and claim shapes in this document are subject to change before release.
@@ -549,10 +573,12 @@ The presentation happens on the consumer's device, where the acceptance already 
 - **Agent.** A named automated actor with a public key and a ceiling, issued a certificate by its operator.
 - **Agent app.** The application through which a consumer interacts with an agent and accepts terms.
 - **Bind.** The association of a grant with one browser session's fingerprint and behavior.
+- **Attestation.** A statement about the consumer, signed by an issuer the site accepts and recorded against a delegation.
 - **Ceiling.** The most an agent may ever do, stated in its certificate as scopes and constraints.
 - **Delegation.** A consumer's authorization of an agent at a site, with scopes equal to the intersection of the ceiling, the policy, and the consumer's acceptance. Its issuer is Foil today and may be the site or the consumer later.
 - **Grant.** A short-lived token signed by the agent for one session, referencing a delegation.
 - **Handoff.** A step that the consumer must complete on the site from their own device.
+- **Issuer.** A party whose signed statements about a consumer a site accepts: a registered identity or risk provider, or the delegation's own operator and its agents.
 - **Operator.** A company that runs browsers for agents and holds an operator certificate issued by Foil.
 - **Plane.** The category assigned to a session: human, agent, or bot.
 - **Policy.** A site's statement of which agents it admits, what they may do, and what a consumer must be shown.

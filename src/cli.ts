@@ -3,6 +3,8 @@ import { UsageError, all, bool, list, num, parseArgs, str, type FlagValue } from
 import { verifyAgent, verifyOperator } from "./lib/certs.ts";
 import { verifyChallenge } from "./lib/challenge.ts";
 import { verifyDelegation } from "./lib/delegation.ts";
+import { credentialBody, issueCredential } from "./lib/credentials.ts";
+import { delegationSubject } from "./lib/attestations.ts";
 import { createDiscoveryProfile, discover, validateDiscoveryProfile } from "./lib/discovery.ts";
 import { decode } from "./lib/jwt.ts";
 import { ALGS, generateKeyFile, readKeyFile, type Alg } from "./lib/keys.ts";
@@ -21,12 +23,14 @@ Usage: aap <resource> <verb> [id] [--field value] [--nested.field value]
 
 Getting started
   login [--api-key K] [--live-key K] [--api-base URL]   Store an API key for this profile
-  accounts create --type operator|site --name NAME     Reference-server onboarding; logs you in
+  accounts create --type operator|site|issuer --name NAME   Reference-server onboarding; logs you in
   whoami                                               The account behind the current key
   serve [--port 4010] [--store DIR] [--discovery FILE] [--allow-local]  Run the reference API locally
   demo [--keep]                                        Run the whole lifecycle against an in-process API
 
 Resources (create, retrieve, list, and the verbs shown)
+  attestations    create --delegation ID --credential FILE|JWT  |  retrieve ID | list [--delegation ID] | revoke ID
+  issuers         retrieve ID | list
   agents          create --name N --scopes a,b [--max-amount N] [--currency usd] [--payees existing_only]  |  retrieve ID | list | update ID | deactivate ID
   policies        create --origin O --tier T [--handoff scope=..,mode=..,url=..] [--disclosures @file.json] ...  |  retrieve ID | list [--origin O]
   terms           create --agent ID --origin O --scopes a,b  |  retrieve ID
@@ -40,6 +44,8 @@ Resources (create, retrieve, list, and the verbs shown)
                   retrieve ORIGIN [--allow-local] (public, no login)
 
 Local signing (nothing is sent to the API except reads)
+  credentials issue --issuer URL --type T --subject URI --claims k=v,k=v --valid-for 30d --key FILE [--out FILE]
+  credentials subject --delegation ID                           The subject an issuer names for a delegation
   grants sign --delegation ID --challenge JWT|FILE --session-ref REF [--intent T] [--scopes a,b] [--out FILE]
   present --grant FILE|JWT --delegation ID [--out FILE]        Build the Foil-Agent-Grant header value
   challenges verify JWT|FILE                                    Check a challenge against the root key
@@ -128,6 +134,22 @@ async function resourceCommand(resource: string, verb: string | undefined, rest:
   const params = () => paramsFromFlags(flags, ["id"]);
 
   switch (resource) {
+    case "attestations": {
+      if (verb === "create") {
+        const credential = await readJwtOrFile(str(flags, "credential", true)!);
+        out(await aap.attestations.create(str(flags, "delegation", true)!, { credential }, ro));
+        return 0;
+      }
+      if (verb === "retrieve") { out(await aap.attestations.retrieve(needId())); return 0; }
+      if (verb === "list") { out(await aap.attestations.list(params())); return 0; }
+      if (verb === "revoke") { out(await aap.attestations.revoke(needId())); return 0; }
+      break;
+    }
+    case "issuers": {
+      if (verb === "retrieve") { out(await aap.issuers.retrieve(needId())); return 0; }
+      if (verb === "list" || verb === undefined) { out(await aap.issuers.list(params())); return 0; }
+      break;
+    }
     case "agents": {
       if (verb === "create") {
         const scopes = list(flags, "scopes") ?? (params().ceiling as { scopes?: string[] } | undefined)?.scopes;
@@ -335,7 +357,7 @@ async function main(argv: string[]): Promise<number> {
     case "accounts": {
       if (sub !== "create") throw new UsageError("usage: aap accounts create --type operator|site --name NAME [--key FILE] [--attestations @file.json] [--asn A,B]");
       const { aap, profileName } = await client(flags, { auth: false });
-      const type = str(flags, "type", true)! as "operator" | "site";
+      const type = str(flags, "type", true)! as "operator" | "site" | "issuer";
       const keyPath = str(flags, "key");
       const key = keyPath ? await readKeyFile(keyPath) : undefined;
       const att = str(flags, "attestations");
@@ -344,6 +366,8 @@ async function main(argv: string[]): Promise<number> {
         vetting: str(flags, "vetting"), session_handling: str(flags, "session-handling"),
         attestations: att ? JSON.parse(await readText(att.replace(/^@/, ""))) : undefined,
         asn: list(flags, "asn"), ja4: list(flags, "ja4"),
+        // An issuer without --key gets a key pair generated and saved to its profile.
+        ...(type === "issuer" ? { url: str(flags, "url", true)! } : {}),
       });
       const cfg = await loadConfig();
       const p = cfg.profiles[profileName] ?? {};
@@ -353,10 +377,56 @@ async function main(argv: string[]): Promise<number> {
       p.account = res.account.id;
       p.account_type = type;
       if (aap.keys.operator) p.keys = { ...p.keys, operator: await saveKeyFile(profileName, "operator", res.operator?.id ?? "operator", aap.keys.operator) };
+      if (aap.keys.issuer) p.keys = { ...p.keys, issuer: await saveKeyFile(profileName, "issuer", res.issuer?.id ?? "issuer", aap.keys.issuer) };
       cfg.profiles[profileName] = p;
       cfg.current = profileName;
       await saveConfig(cfg);
       out({ ...res, logged_in: { profile: profileName, api_base: p.api_base, signing_key: p.keys?.operator } });
+      return 0;
+    }
+    case "credentials": {
+      if (sub === "subject") {
+        const { aap } = await client(flags);
+        const d = await aap.delegations.retrieve(str(flags, "delegation", true)!);
+        out({ object: "credential_subject", subject: delegationSubject(d), delegation: d.id });
+        return 0;
+      }
+      if (sub !== "issue") throw new UsageError("usage: aap credentials issue --issuer URL --type T --subject URI --claims k=v --valid-for 30d --key FILE [--out FILE] | aap credentials subject --delegation ID");
+      const key = await readKeyFile(str(flags, "key", true)!);
+      const claims: Record<string, string | number | boolean> = {};
+      for (const pair of list(flags, "claims") ?? []) {
+        const eq = pair.indexOf("=");
+        if (eq === -1) throw new UsageError(`--claims entries look like name=value (got '${pair}')`);
+        const name = pair.slice(0, eq).trim();
+        const raw = pair.slice(eq + 1).trim();
+        claims[name] = raw === "true" ? true : raw === "false" ? false : /^-?\d+(\.\d+)?$/.test(raw) ? Number(raw) : raw;
+      }
+      let subject = str(flags, "subject");
+      if (!subject) {
+        const delegation = str(flags, "delegation");
+        if (!delegation) throw new UsageError("--subject or --delegation is required");
+        // An issuer account cannot read a delegation, so a provider is given the subject rather than deriving it.
+        const d = await (await client(flags)).aap.delegations.retrieve(delegation).catch((e: unknown) => {
+          throw e instanceof AapError && e.code === "resource_missing"
+            ? new UsageError(`cannot read ${delegation} with this account, so the subject cannot be derived. Pass --subject, which whoever asked for the check gives you.`)
+            : e;
+        });
+        subject = delegationSubject(d);
+      }
+      const token = await issueCredential(credentialBody({
+        issuer: str(flags, "issuer", true)!,
+        type: str(flags, "type", true)!,
+        subject,
+        claims,
+        context: list(flags, "context"),
+        validUntil: new Date(Date.now() + parseDuration(str(flags, "valid-for"), 86400) * 1000),
+      }), key);
+      const path = str(flags, "out");
+      if (path) {
+        // A credential can carry personal data: write it with owner-only permissions and never overwrite.
+        await (await import("node:fs/promises")).writeFile(path, token, { mode: 0o600, flag: "wx" });
+        out({ object: "verifiable_credential", out: path, subject });
+      } else out({ object: "verifiable_credential", credential: token, subject });
       return 0;
     }
     case "keys": {

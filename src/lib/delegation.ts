@@ -24,7 +24,7 @@ export interface DelegationRequest {
 
 /** The fields an operator signs when it posts a delegation request. Order matters. */
 export function delegationSigningPayload(body: {
-  agent: string; origin: string; subject: string; scopes?: string[]; terms: string; intent?: string; acceptance: Acceptance; site_session?: string | null;
+  agent: string; origin: string; subject: string; scopes?: string[]; terms: string; intent?: string; acceptance: Acceptance; site_session?: string | null; attestations?: string[] | null;
 }): string {
   return JSON.stringify({
     agent: body.agent,
@@ -35,6 +35,7 @@ export function delegationSigningPayload(body: {
     intent: body.intent ?? "",
     acceptance: body.acceptance,
     site_session: body.site_session ?? null,
+    attestations: body.attestations ?? null,
   });
 }
 
@@ -101,6 +102,7 @@ export async function createDelegation(store: Store, root: KeyFile, req: Delegat
       ...(req.acceptance.copies_sent_to ? { copies_sent_to: req.acceptance.copies_sent_to } : {}),
     },
     observed,
+    attested: [],
     presented: null,
   };
   const claims: DelegationClaims = {

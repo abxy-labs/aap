@@ -7,6 +7,7 @@ export const EVENT_TYPES = [
   "policy.created",
   "terms.created",
   "delegation.created", "delegation.revoked", "delegation.expired",
+  "attestation.created", "attestation.revoked",
   "session.bound", "session.downgraded", "session.scope_used",
   "handoff.created", "handoff.completed", "handoff.canceled", "handoff.expired",
 ] as const;

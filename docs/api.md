@@ -63,6 +63,8 @@ Every object has an `id` prefixed by its type, an `object` field naming the type
 | `sess_` | Session |
 | `ho_` | Handoff |
 | `evt_` | Event |
+| `att_` | Attestation |
+| `iss_` | Issuer |
 | `we_` | Webhook endpoint |
 | `req_` | Request |
 
@@ -229,11 +231,12 @@ POST /v1/policies
 | `allow` | object | `operators` and `agents` are `"any"` or lists of ids; `deny_agents` is a list of agent ids refused by name. |
 | `constraints` | object | Limits on transact scopes: `currency`, `max_amount`, `max_total`, `max_count`, `payees`. The more restrictive of yours and the agent's applies. |
 | `disclosures` | object | A disclosure bundle. See [Disclosures](spec.md#disclosures). |
-| `evidence` | object | Per tier, the evidence a delegation must carry: `asserted`, `observed`, `presented`, or `site`. |
+| `evidence` | object | Per tier, the evidence a delegation must carry: `asserted`, `observed`, `attested`, `presented`, or `site`. |
 | `handoffs` | list | Per scope, `mode` (`approve` or `complete`, default `complete`), an https `url` template with `{id}` and optionally `{code}`, and `expires_in` in seconds (default 900; 86400 for `identity:verify`). |
 | `max_age_s` | integer | Maximum delegation age in seconds. Default 30 days. |
 | `disclose` | list | `operator` and/or `agent`, to show those names in your session responses. |
-| `credentials` | object | Accepted credential `types`, `issuers`, and requestable `claims`. Reserved. |
+| `attestations` | object | Which attestations this site accepts: `issuers` (issuer ids, or `"operator"` for the delegation's own operator and its agents), `types`, required `claims`, and optionally `max_age_s`. Configuring it requires nothing until a tier's evidence is `attested`. |
+| `credentials` | object | Reserved for consumer-held credentials: accepted `types`, `issuers`, and requestable `claims`. |
 
 `GET /v1/policies/:id` and `GET /v1/policies?origin=` read your own policies. Operators never read policies directly; they read terms, which are the policy already intersected with their agent.
 
@@ -339,6 +342,73 @@ POST /v1/delegations/:id/revoke     { "by": "consumer" }
 
 Operators see their own delegations; sites see delegations at origins they own. Either may revoke. Every grant under a revoked delegation is refused at its next verification with `delegation_revoked`.
 
+## Attestations
+
+An attestation is a statement about the consumer, signed by an issuer, recorded against a delegation. The credential is a W3C verifiable credential serialized as a JWT with the `vc+jwt` media type, signed with ES256 or EdDSA, whose subject is the delegation's pseudonymous identifier.
+
+```json
+{
+  "id": "att_4Kq2m",
+  "object": "attestation",
+  "created": 1758000120,
+  "livemode": false,
+  "status": "active",
+  "delegation": "dl_1Qx8k2",
+  "origin": "bank.example",
+  "issuer": "https://identity.example",
+  "type": "EmailControlCredential",
+  "subject": "urn:aap:subject:op_7a1d:usr_41b",
+  "claims": { "email_verified": true },
+  "issued_at": 1758000000,
+  "valid_until": 1760592000,
+  "verified_at": 1758000120,
+  "submitted_by": "issuer",
+  "holder_bound": false,
+  "revoked_at": null,
+  "revoked_by": null,
+  "metadata": {}
+}
+```
+
+`status` is `active`, `revoked`, or `expired`. `claims` holds only the claims the site's policy names; everything else in the credential is discarded and the credential itself is not retained. `holder_bound` is always false: this is a statement by an issuer, not a presentation from the consumer's own wallet.
+
+### Submit an attestation
+
+```
+POST /v1/delegations/:id/attestations     { "credential": "eyJ…" }
+```
+
+An operator may submit against its own delegations. An issuer account may submit against any delegation whose id it has been given, which is what lets a provider deliver its own statement; it cannot read the delegation. A site may submit against delegations at its origins.
+
+An operator can also attach credentials when it creates the delegation, which avoids a second call and any exchange with the site:
+
+```
+POST /v1/delegations     { …, "attestations": ["eyJ…"] }
+```
+
+The credential is checked against the keys registered for the issuer it names, so a credential signed by one accepted issuer cannot name another. It is then checked against the site's policy. Failures are returned as `credential_invalid`, `issuer_not_accepted`, `attestation_type_not_accepted`, `attestation_subject_mismatch`, `attestation_claims_missing`, `attestation_too_old`, `attestations_not_accepted`, `no_trusted_issuer`, `issuer_mismatch`, or `delegation_inactive`.
+
+### Retrieve, list, revoke
+
+```
+GET  /v1/attestations/:id
+GET  /v1/attestations?delegation=&origin=&issuer=&status=
+POST /v1/attestations/:id/revoke
+```
+
+The site and the issuing provider can revoke; the operator cannot. A revoked attestation stops satisfying a policy at the next session binding or scope use.
+
+## Issuers
+
+An issuer is a party whose signed statements a site can accept. Registration is `POST /v1/accounts` with `type: "issuer"`, an https `url` that credentials name as their issuer, and `public_keys`, each a public JWK with a `kid`.
+
+```
+GET /v1/issuers/:id
+GET /v1/issuers
+```
+
+Both are readable by any account, so a site can see the issuers it might accept and an operator can see which issuer a site named. A site names issuers by id in its policy. Naming `"operator"` instead accepts credentials signed by the delegation's own operator or its agents, which is how an application states a check it performed itself.
+
 ## Sessions
 
 A session is one browser session at one origin as Foil scored it. Sites read sessions on the verification call they already make. An agent session carries the agent block: what the session may do, what it has done, and the delegation behind it.
@@ -367,6 +437,11 @@ A session is one browser session at one origin as Foil scored it. Sites read ses
       "created_at": "2026-09-01T14:03:40Z", "expires_at": "2026-10-01T14:03:40Z", "record": "dr_5e1",
       "asserted": { "terms": "trm_3f2a", "acknowledged": ["esign", "share"], "channel": "imessage" },
       "observed": { "site_session": "sess_2b81", "human": true, "known_device": true, "age_s": 240, "handoffs": ["payments:initiate"] },
+      "attested": [
+        { "attestation": "att_4Kq2m", "issuer": "https://identity.example", "type": "EmailControlCredential",
+          "claims": { "email_verified": true }, "holder_bound": false,
+          "issued_at": 1758000000, "valid_until": 1760592000, "verified_at": 1758000120 }
+      ],
       "presented": null
     },
     "handoff": null,
@@ -501,6 +576,7 @@ Every change produces an event. Events can be listed, and they are delivered to 
 | `policy.created` | A site published a policy version. |
 | `terms.created` | Terms were created for an agent at an origin. |
 | `delegation.created`, `delegation.revoked`, `delegation.expired` | A delegation changed state. Expiry is noticed on the next read of the delegation. |
+| `attestation.created`, `attestation.revoked` | An attestation was accepted against a delegation, or stopped counting. Events carry the attestation object, which holds only policy-named claims. |
 | `session.bound`, `session.downgraded`, `session.scope_used` | A presentation was verified, a session failed a check, or a bound session exercised a scope. |
 | `handoff.created`, `handoff.completed`, `handoff.canceled`, `handoff.expired` | A handoff changed state. |
 

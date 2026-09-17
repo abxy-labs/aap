@@ -7,6 +7,7 @@ import { authenticate, type Principal } from "./auth.ts";
 import { API_VERSION, errorBody, expand } from "./envelope.ts";
 import { accountRoutes } from "./resources/accounts.ts";
 import { agentRoutes } from "./resources/agents.ts";
+import { attestationRoutes } from "./resources/attestations.ts";
 import { delegationRoutes } from "./resources/delegations.ts";
 import { directoryRoutes } from "./resources/directory.ts";
 import { eventRoutes } from "./resources/events.ts";
@@ -57,6 +58,7 @@ export async function createApp(baseStore: Store, opts: AppOptions = {}): Promis
   policyRoutes(router);
   termsRoutes(router);
   delegationRoutes(router);
+  attestationRoutes(router);
   sessionRoutes(router);
   handoffRoutes(router);
   eventRoutes(router);

@@ -1,7 +1,10 @@
 import type { Acceptance, StoredDelegation } from "../../types.ts";
+import { verifyOperator } from "../../lib/certs.ts";
 import { createDelegation, delegationSigningPayload, effectiveStatus, revokeDelegation, verifyRequestSignature } from "../../lib/delegation.ts";
 import { forbidden, notFound } from "../../lib/errors.ts";
 import { emitEvent } from "../../lib/events.ts";
+import { acceptAttestation, agentSigningKey, operatorSigningKey } from "../../lib/attestations.ts";
+import { loadPolicy } from "../../lib/policy.ts";
 import { ownsOrigin, requireType } from "../auth.ts";
 import { paginate, present } from "../envelope.ts";
 import { list, metadata, obj, pageQuery, str } from "../params.ts";
@@ -42,6 +45,7 @@ export function delegationRoutes(r: Router): void {
       intent: str(body, "intent") ?? "",
       acceptance,
       site_session: str(body, "site_session") ?? null,
+      attestations: list(body, "attestations") ?? null,
     };
     await verifyRequestSignature(delegationSigningPayload(req), signature, agent.public_key as never);
     const d = await createDelegation(store, root, {
@@ -56,8 +60,18 @@ export function delegationRoutes(r: Router): void {
       siteSession: req.site_session ?? undefined,
       metadata: metadata(body),
     });
-    await emitEvent(store, "delegation.created", present(d), { id: ctx.requestId, idempotency_key: ctx.idempotencyKey ?? undefined });
-    return present(d);
+    // Credentials the operator already holds ride along with the delegation, so a site needs no separate exchange.
+    for (const credential of req.attestations ?? []) {
+      const policy = (await loadPolicy(store, root, req.origin))!;
+      const admitsOperator = policy.attestations?.issuers.includes("operator") ?? false;
+      const operatorKey = admitsOperator ? operatorSigningKey(operator) : undefined;
+      const agentKey = admitsOperator ? agentSigningKey(claims) : undefined;
+      const a = await acceptAttestation(store, { delegation: d, policy, credential, submittedBy: "operator", operatorKey, agentKey });
+      await emitEvent(store, "attestation.created", a, { id: ctx.requestId });
+    }
+    const created = (await store.getDelegation(d.id))!;
+    await emitEvent(store, "delegation.created", present(created), { id: ctx.requestId, idempotency_key: ctx.idempotencyKey ?? undefined });
+    return present(created);
   });
 
   r.add("GET", "/v1/delegations/:id", async (ctx) => present(await loadDelegation(ctx, ctx.params.id!)));

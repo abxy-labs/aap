@@ -14,8 +14,8 @@ function random(n: number): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export async function createAccount(store: Store, input: { type: "operator" | "site"; name: string; operator?: string | null }): Promise<{ account: Account; keys: { test: string; live: string } }> {
-  const account: Account = { id: id("acct"), object: "account", created: now(), type: input.type, name: input.name, operator: input.operator ?? null, origins: [] };
+export async function createAccount(store: Store, input: { type: Account["type"]; name: string; operator?: string | null; issuer?: string | null }): Promise<{ account: Account; keys: { test: string; live: string } }> {
+  const account: Account = { id: id("acct"), object: "account", created: now(), type: input.type, name: input.name, operator: input.operator ?? null, issuer: input.issuer ?? null, origins: [] };
   await store.putAccount(account);
   const keys = { test: `sk_test_${random(24)}`, live: `sk_live_${random(24)}` };
   for (const [mode, key] of Object.entries(keys)) {
@@ -44,7 +44,7 @@ export async function authenticate(store: Store, req: Request): Promise<Principa
   return { account, livemode: rec.livemode, key: rec };
 }
 
-export function requireType(p: Principal, type: "operator" | "site"): void {
+export function requireType(p: Principal, type: Account["type"]): void {
   if (p.account.type !== type) {
     throw forbidden(`This endpoint is for ${type} accounts. Your key belongs to a ${p.account.type} account.`);
   }

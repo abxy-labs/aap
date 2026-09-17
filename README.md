@@ -16,7 +16,9 @@ Three properties hold throughout. Foil never presents an interface to a consumer
   - [Integrate an operator](docs/guides/operator.md), for a company that runs browsers for agents.
   - [Integrate an agent application](docs/guides/agent-app.md), for the product a consumer talks to.
   - [Integrate an embedded provider](docs/guides/embedded-provider.md), for a component that runs inside other companies' flows.
+  - [Issue attestations](docs/guides/attestation-issuer.md), for an identity or risk provider, or an application stating a check it performed itself.
 - [examples/lifecycle.sh](examples/lifecycle.sh): every command in order against a running reference API.
+- [examples/attestations.ts](examples/attestations.ts): both ways a credential reaches a site, end to end.
 
 ## Quick start
 
@@ -87,7 +89,7 @@ src/server/           the reference API: router, auth, envelope, resources
 src/lib/              protocol objects, verification, handoffs, events, the store
 src/types.ts          object and claim shapes
 test/                 library, downgrade-reason, and API tests
-examples/             shell walkthrough
+examples/             shell walkthrough and the attestation example
 ```
 
 ## Tests
@@ -96,7 +98,7 @@ examples/             shell walkthrough
 bun test
 ```
 
-Covers the lifecycle, every downgrade reason, the reserved credential fields, key interoperability, and the API end to end: conventions, errors, idempotency, pagination, expansion, delegations, sessions, handoffs in both modes, identity verification, test agents, events, and webhook signatures.
+Covers the lifecycle, every downgrade reason, attestations from providers and applications, key interoperability, and the API end to end: conventions, errors, idempotency, pagination, expansion, delegations, sessions, handoffs in both modes, identity verification, test agents, events, and webhook signatures.
 
 ## Status
 
