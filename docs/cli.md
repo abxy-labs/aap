@@ -74,6 +74,12 @@ aap policies create --origin bank.example --tier read --disclosures @bundle.json
 
 ## Resources
 
+For an identity or risk provider integration, see
+[Integrate an identity and risk provider](guides/identity-risk-provider.md).
+It shows how an institution can record an externally validated attestation
+reference in a handoff result using the existing commands, and distinguishes
+that from the planned customer-credential verification flow.
+
 Every resource supports `create`, `retrieve ID`, and `list`, plus the verbs shown. Arguments after the verb are the id; everything else is a flag.
 
 ### agents

@@ -1,5 +1,9 @@
 # Integrate an embedded provider
 
+If your role is to issue identity or risk attestations rather than host a component,
+start with [Integrate an identity and risk provider](identity-risk-provider.md).
+A provider may perform both roles.
+
 This guide is for a provider whose product runs inside other companies' flows: a bank connection widget, an identity verification step, a payment form, or any component that a host site places in an iframe or opens in a popup. The provider runs the Foil SDK on its own origin, and an agent that is driving the host's page arrives in the provider's frame partway through a task. This guide covers how the protocol evaluates that frame, what policy a provider typically sets, how to apply per-host decisions, how disclosures work when two parties have them, and what happens at a third origin such as a bank's sign-in page. When you finish, agents in your frame are on the agent plane under your own policy, whether or not the host participates.
 
 The guide assumes you have read [Integrate a site](site.md), since a provider is a site with respect to its own origin. Everything in that guide applies to your frame. This guide covers only what is different.
