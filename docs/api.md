@@ -222,7 +222,7 @@ POST /v1/policies
 | `handoffs` | list | Per scope, `mode` (`approve` or `complete`, default `complete`), an https `url` template with `{id}` and optionally `{code}`, and `expires_in` in seconds (default 900; 86400 for `identity:verify`). |
 | `max_age_s` | integer | Maximum delegation age in seconds. Default 30 days. |
 | `disclose` | list | `operator` and/or `agent`, to show those names in your session responses. |
-| `credentials` | object | Accepted credential `types`, `issuers`, and requestable `claims`. Reserved. |
+| `credentials` | object | Optional accepted `types`, `issuers`, required `claims`, and pinned `trust` rules. Does not require credentials unless `evidence` requires `presented` for a tier. See below. |
 
 `GET /v1/policies/:id` and `GET /v1/policies?origin=` read your own policies. Operators never read policies directly; they read terms, which are the policy already intersected with their agent.
 
@@ -295,7 +295,7 @@ A delegation is a consumer's authorization of one agent at one origin, valid unt
 }
 ```
 
-`status` is `active`, `revoked`, or `expired`. `record` is the id of the delegation record, expandable, which holds the asserted evidence from the application, the observed evidence from Foil, and the reserved `presented` block.
+`status` is `active`, `revoked`, or `expired`. `record` is the id of the delegation record, expandable, which holds the asserted evidence from the application, the observed evidence from Foil, and the reserved `presented` block. Credential verification results are live sidecar records, not embedded in this certificate; the session exposes the current safe summary.
 
 ### Create a delegation
 
@@ -327,6 +327,59 @@ POST /v1/delegations/:id/revoke     { "by": "consumer" }
 ```
 
 Operators see their own delegations; sites see delegations at origins they own. Either may revoke. Every grant under a revoked delegation is refused at its next verification with `delegation_revoked`.
+
+## Credential verifications
+
+These endpoints are institution-only and isolated by owned origin and test/live mode:
+
+| Operation | Endpoint | Body |
+| --- | --- | --- |
+| Create request | `POST /v1/credential_verifications` | `delegation`, `credential_subject` |
+| Read current state | `GET /v1/credential_verifications/:id` | None |
+| Complete | `POST /v1/credential_verifications/:id/complete` | `presentation`: signed W3C `vp+jwt` |
+| Revoke accepted evidence or cancel pending request | `POST /v1/credential_verifications/:id/revoke` | None |
+
+The institution must authenticate the customer-to-issuer-subject mapping before
+creating a request. Operators cannot create, retrieve, complete, or revoke it.
+The request contains `id`, object metadata, `delegation`, `origin`,
+`credential_subject`, `policy_version`, `policy_hash`, `audience`, `nonce`, `expires_at`,
+`status` (pending, verified, revoked), and `evidence` (null until verified).
+Pending requests expire after five minutes; completion rejects them after expiry.
+
+Each `credentials.trust` rule pins `issuer`, `type`, a public ES256 JWK `key`
+with `kid`, exact inline `context`, required primitive claim values in `claims`,
+and `max_age_s` (1–3600). Top-level policy `claims` requires presence; rule
+`claims` requires equality. Any one fully matching rule satisfies the policy.
+Types/issuer lists without explicit trust rules never authorize a credential.
+
+The credential and presentation are both signed by the pinned issuer key. The
+profile accepts one short-lived VC, a W3C enveloped credential in a VP, with exact
+customer, nonce, and audience binding. It rejects unsupported status mechanisms,
+remote key/context discovery, and customer-holder claims. See the
+[complete profile and CLI example](guides/identity-risk-provider.md).
+
+A verified result carries a summary: `type`, `issuer`, `holder_bound: false`,
+empty `claims`, `verified_at`, `verification` ID, and evidence `expires_at`.
+The API discards raw tokens and personal claim values. Deliver presentations over
+authenticated TLS directly to the institution/verifier; signing does not encrypt.
+
+Verification consumes the request exactly once under a file-backed lock. Invalid
+proofs do not consume it. For an uncertain completion retry use the same idempotency
+key and body; cached responses are historical, so retrieve for current state.
+`credential_busy` (409) is retryable and is not cached. Other new error codes are
+`credential_invalid`, `credential_request_consumed`, `credential_policy_changed`,
+`credential_policy_missing`, `invalid_credential_policy`, `invalid_subject`, and
+`delegation_inactive`. Unauthorized objects are hidden behind existing 403/404 errors.
+
+Binding and protected scope use consult live evidence. Expiry, explicit revocation,
+or any policy version change means it no longer satisfies `presented`. Non-required
+actions remain independent. Session GET returns a snapshot, not a fresh authorization.
+The normal delegation certificate remains unchanged and contains no credential claims.
+
+Events `credential_verification.created`, `.verified`, and `.revoked` carry only
+the verification ID, object type, origin, delegation ID, and status. They are visible
+only to the institution, including through its configured webhooks. They never
+include the subject mapping, request nonce, or tokens.
 
 ## Sessions
 

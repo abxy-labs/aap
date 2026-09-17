@@ -4,6 +4,8 @@ import { createHandoff } from "./handoff.ts";
 import type { KeyFile } from "./keys.ts";
 import { handoffConfigFor, loadPolicy } from "./policy.ts";
 import { Store } from "./store.ts";
+import { activeCredentialEvidence } from "./credentials.ts";
+import { tierOf } from "./scopes.ts";
 import { downgradeSession } from "./verify.ts";
 
 export interface UseResult {
@@ -26,6 +28,17 @@ export async function useScope(store: Store, root: KeyFile, sessionId: string, s
     return { session: s, statusHeader: "Foil-Agent-Status: downgraded; reason=scope_violation" };
   }
   const policy = await loadPolicy(store, root, s.origin);
+  const tier = tierOf(scope);
+  if (policy && tier && policy.evidence[tier] === "presented") {
+    const d = s.delegation_id ? await store.getDelegation(s.delegation_id) : null;
+    const evidence = d && d.status === "active" && d.expires_at > Date.now() / 1000
+      ? await activeCredentialEvidence(store, d.id, policy) : null;
+    if (!evidence) {
+      await downgradeSession(store, s, "evidence_insufficient", "Credential evidence expired, was revoked, or no longer satisfies current policy.");
+      return { session: s, statusHeader: "Foil-Agent-Status: downgraded; reason=evidence_insufficient" };
+    }
+    s.agent.delegation.presented = evidence;
+  }
   if (policy && handoffConfigFor(policy, scope)) {
     const handoff = await createHandoff(store, root, { sessionId, scope, by: "foil" });
     const fresh = (await store.getSession(sessionId))!;

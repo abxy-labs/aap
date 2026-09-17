@@ -64,7 +64,7 @@ Scopes are a ceiling, not a plan. An agent cannot predict every step of a task, 
 
 ### Asserted, observed, and presented evidence
 
-A delegation record contains up to three kinds of evidence, and the protocol keeps them separate. Evidence that is **asserted** comes from the agent's application, signed with the agent key: which terms were shown, which acknowledgements the consumer gave, in what channel, and when. Evidence that is **observed** comes from Foil's own presence on the site: a live session at the site for the same consumer on a device Foil has seen before, scored human, and its age at the time the delegation was created. Evidence that is **presented** is reserved for verified credentials accepted under the site's issuer and claim policy, with subject and presentation bindings checked. Consumer-held presentations and business-submitted evidence must retain their distinct assurance properties; a business submission is not proof of a consumer-held key. This capability is not implemented in the current version; see [Planned: verifiable credentials](#planned-verifiable-credentials). A site's policy states which kind of evidence each tier requires.
+A delegation record contains up to three kinds of evidence, and the protocol keeps them separate. Evidence that is **asserted** comes from the agent's application, signed with the agent key: which terms were shown, which acknowledgements the consumer gave, in what channel, and when. Evidence that is **observed** comes from Foil's own presence on the site: a live session at the site for the same consumer on a device Foil has seen before, scored human, and its age at the time the delegation was created. Evidence that is **presented** comes from verified credentials accepted under the site's issuer and claim policy, with subject and presentation bindings checked. Consumer-held presentations and business-submitted evidence must retain their distinct assurance properties; a business submission is not proof of a consumer-held key. The reference implementation supports an optional business-credential profile with live evidence linked to the delegation; see [Optional: verifiable credentials](#optional-verifiable-credentials). A site's policy states which kind of evidence each tier requires.
 
 
 ### Disclosures
@@ -173,11 +173,11 @@ A policy is configured in the Foil dashboard and takes effect at the next verifi
 2. **Choose which operators and agents are admitted.** You can admit all vetted operators, specific operators, or specific agents by name. A denied agent is denied without affecting the rest of its operator's agents.
 3. **Set constraints for transact scopes,** if your ceiling includes them: the maximum amount per transaction, the maximum total per delegation, the maximum count, and whether payments may go only to existing payees.
 4. **Attach disclosure bundles.** Upload the documents, write the acknowledgement text, state how each document must be rendered and whether a copy must be retained, and name the scopes the bundle gates. Mark a bundle as site-only if the acceptance must happen on your site.
-5. **Set evidence requirements per tier.** For each tier, choose whether an asserted acceptance is sufficient, whether an observed link to a live session at your site is required, whether a presented credential is required, or whether the step must be completed on your site by the consumer. The presented level is reserved and cannot be satisfied in the current version.
+5. **Set evidence requirements per tier.** For each tier, choose whether an asserted acceptance is sufficient, whether an observed link to a live session at your site is required, whether a presented credential is required, or whether the step must be completed on your site by the consumer. The optional business-credential flow can satisfy the presented level; it does not imply customer wallet possession.
 6. **Configure handoffs.** For each scope the consumer must complete on your site, choose the mode, `approve` or `complete`, and give the URL of the page on your site that hosts the step, as a template with `{id}` for the handoff id. Identity verification is always a handoff in `complete` mode.
 7. **Set the maximum delegation age.** Thirty days is a common value.
 8. **Choose what is disclosed to you.** Operator and agent names appear in your verification response only if you enable them. The plane, scopes, and delegation record appear regardless.
-9. **Optionally state credential requirements.** The policy carries a `credentials` field naming the credential types and issuers you accept and the claims you may request. It is empty by default and has no effect until presentations are available.
+9. **Optionally state credential requirements.** The optional `credentials` field pins accepted issuer keys, credential types, context, claims, and freshness. It is empty by default. Configuring it does not make credentials mandatory; a tier must explicitly require `presented` evidence.
 
 
 ### Read the verification response
@@ -512,35 +512,68 @@ Test mode adds helpers under `/v1/test_helpers/` for consumer sessions, challeng
 The current version presents the grant on the SDK's telemetry channel, which requires that the SDK be running on a page. A planned extension lets a site's edge issue the same challenge on HTTP responses, so that an agent can present its chain on the request that follows, before any page loads, and so that requests without a page, such as API calls, can be covered. The challenge and the presentation are the same objects; only the channel differs. On the edge channel the answer is an HTTP Message Signature over the request with the challenge as a covered component, which is the format Web Bot Auth uses, with the grant and chain carried in the same header as on the telemetry channel. An operator that has implemented Web Bot Auth signing reuses it and changes only when it signs. The edge verifies the chain, removes the presentation, and forwards the request to the origin with the plane and scopes. Because the edge has network-level evidence but not yet behavioral evidence, its verdict is provisional until the SDK binds, and the verification response will state which of the two a site is reading.
 
 
-## Planned: verifiable credentials
+## Optional: verifiable credentials
 
-The planned integration adopts [W3C Verifiable Credentials Data Model 2.0](https://www.w3.org/TR/vc-data-model-2.0/), initially targeting the JOSE/JWT securing path in [Securing Verifiable Credentials using JOSE and COSE](https://www.w3.org/TR/vc-jose-cose/). AAP does not define a competing signed-attestation format. The implementation profile must still select supported algorithms, claim schemas, trusted key resolution, status handling, and the presentation exchange. Existing AAP authorization certificates, grants, and challenges are unchanged. Native VC issuance, presentation, and verification are not implemented in the reference API.
+AAP works without identity or risk attestations. They are an optional capability,
+required only for actions where an institution's policy asks for `presented`
+evidence. A missing attestation is not inherently an invalid AAP request.
 
-An attestation issuer is a role available to both specialist identity/risk providers and businesses checking their own users, including agent applications, browser operators, and institutions. An application may attest that it verified control of an email address or phone number; an identity provider may attest to a more extensive identity check. Those are different claims, not interchangeable assurance levels. The receiving institution decides which issuers, claims, methods, and freshness it accepts for each action. Authenticating an issuer's signature does not make its claims true, grant permissions, or establish customer consent. See [Issue identity and risk credentials](guides/identity-risk-provider.md).
+The reference implementation uses [W3C VC Data Model 2.0](https://www.w3.org/TR/vc-data-model-2.0/)
+and the JOSE path of [W3C VC JOSE/COSE](https://www.w3.org/TR/vc-jose-cose/), not a new
+AAP signed-attestation format. Existing authorization certificates, grants, and
+customer acceptance are unchanged. The initial profile supports short-lived ES256
+`vc+jwt` credentials and `vp+jwt` presentations with an original signed credential
+inside a W3C `EnvelopedVerifiableCredential` data URI.
 
-An issuer can sign its own VC using its authorized key. As an optional future convenience, Foil could issue a separate VC recording that an authenticated business reported a check, explicitly identifying that business. Such a receipt is not independent verification by Foil and cannot satisfy a requirement for a specialist provider's signature. Provider credentials retain their original issuer and proof; trust must not be silently upgraded by relaying or re-signing them.
+An issuer may be a specialist identity/risk provider or a business checking its own
+users, including an agent application or browser operator. Email or phone control
+and legal-identity verification are different claims. Institutions explicitly pin
+issuer keys, types, vocabulary, required values, methods, and freshness. A signature
+does not establish truth, permission, or consent. No keys or contexts are fetched
+from token-supplied URLs.
 
-The protocol reserves three places for credential integration, each present in the current version as an empty field. The existing type definitions are placeholders and do not fully specify the future verification contract.
+Only the institution can create a verification request against its delegation. It
+must first establish the issuer-subject-to-customer mapping through its authenticated
+onboarding process. The request supplies a fresh nonce, audience, policy version,
+and five-minute lifetime. The issuer signs a presentation in response; the institution
+submits it to the verifier. Successful completion checks both proofs, claims,
+subject, freshness, and request bindings, then atomically consumes the request.
+A business-held presentation is not customer wallet-key proof: `holder_bound` stays
+false. The request exchange is authenticated backend delivery, not a wallet protocol.
 
-First, a presentation is a third kind of evidence in the delegation record, called presented, alongside asserted and observed. A site can require it per tier in the same setting it uses for the other two. It is the evidence that fits onboarding, where there is no prior session to observe and no account to sign in to.
+Raw credentials and personal claims never enter browser-visible grants, shared
+handoff results, events, or stored verification results. The institution can retain
+the exact submitted credential privately and use its claims after verification.
+The verifier stores only a safe result linked to the delegation; the session exposes
+that summary. The delegation certificate/record's reserved `presented` field remains
+null, avoiding a stale credential embedded in a reusable certificate.
 
-Second, the consumer can be the delegation's issuer. The acceptance, with its terms version, acknowledgements, scopes, and expiry, becomes a request the consumer's wallet signs, and the delegation is consumer-signed and Foil-countersigned for the observed facts. The delegation certificate's `issuer` field records this, and is `foil` today. A consumer-signed delegation has the same shape as a payment mandate: a subject, a counterparty, limits, and an expiry, signed by the person's own key. A delegation whose scopes include money movement can carry or reference a payment mandate issued under a payment protocol, so that the site's authorization and the network's authorization describe the same act.
+Session binding and each protected scope use recheck the live result. Evidence
+expires at the earlier of the credential's validity limit and the institution's
+maximum check age. Revocation of the result or any policy version change invalidates
+it for future protected operations. Other scopes that do not require evidence remain
+independent. Session retrieval is a snapshot, not an authorization decision.
 
-Third, the delegation's subject can be a credential-bound identifier for the site, or selectively disclosed claims the site's policy requests, encrypted to the verifier. The policy's `credentials` field names the accepted credential types and issuers and the claims that may be requested.
+See [Issue identity and risk credentials](guides/identity-risk-provider.md) for the
+exact supported profile, API and CLI examples, and subject-mapping responsibility.
+The profile rejects unsupported status/schema/proof fields instead of ignoring them.
+It is intentionally limited to one credential per presentation, flat pinned terms,
+short lifetimes of at most one hour, and direct issuer-held proof. Global issuer
+revocation/status lists, COSE, SD-JWT, selective disclosure, encrypted relays, and
+customer wallet integrations are not implemented. Do not use this profile where
+issuer status checking or those assurance properties are required.
 
-In the proposed integration, Foil verifies credentials for an institution under that institution's policy. A consumer-held credential can be presented from the consumer's device through an agreed standard presentation mechanism with holder-key proof. A business can also submit evidence through its authenticated backend, but this does not establish customer holder-key possession. Preserve that distinction in the verification result; never infer `holder_bound` from the issuer's signature. Issuers, holders, subjects, and verifiers are separate roles even when one organization performs several of them.
-
-Before accepting evidence, the verifier must check the VC structure and proof, issuer/key authorization, permitted claims and methods, validity and check freshness, required status, and subject binding to the customer/delegation. The presentation must be bound to the intended verifier and a fresh challenge, with replay protection. A VC signature or a bare subject identifier is insufficient to establish those bindings. Exact exchange and binding rules are required before implementation; the existing policy fields do not enforce them today.
-
-Transmit only the claims needed for the decision, with confidential values encrypted to the authorized verifier when carried by an intermediary. Signing is not encryption; do not put credentials or personal claims in the browser-visible grant header or shared handoff results. For a check on a specific email address or phone number, the signed evidence must bind that value or an authorized resolvable reference, not merely assert a generic boolean. Credential status changes and ongoing risk updates require explicit revalidation and access decisions, not an assumption that they automatically revoke a delegation.
-
-Today's institution-completed handoff can carry an opaque reference to externally validated evidence. That application-defined result is not a VC or `presented` evidence, and does not demonstrate native credential verification. The guide retains this working fallback separately from the planned standards-based integration.
+Consumer-signed delegations remain a future extension. A future Foil-hosted reporting
+receipt must distinguish a business's report from independent verification by Foil;
+it must not replace a provider's original signature or silently upgrade trust.
+Institution-completed handoff references and operator certificate metadata remain
+separate features; neither counts as verified customer credential evidence.
 
 ## Limitations
 
 - The protocol requires the Foil SDK on the pages an agent visits. Requests that do not load a page are not covered until the edge challenge is available.
 - Foil is the issuer of delegation certificates in the current version. Site-issued and consumer-issued delegations are designed for but not yet available.
-- Verifiable credential presentations are reserved as an evidence level and a policy field but cannot yet be recorded.
+- W3C credential support is the bounded optional business profile above, not a general wallet, status-list, or identity-proofing implementation.
 - The scope vocabulary is oriented to financial services. Sites in other categories may find it incomplete, and additions are made to the shared vocabulary rather than per site.
 - A session driven by a browser's own built-in assistant, on the consumer's own device, is not yet distinguished from a human session.
 - Endpoint names, header names, and claim shapes in this document are subject to change before release.

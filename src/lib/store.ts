@@ -1,8 +1,9 @@
-import { mkdir, readdir, rm } from "node:fs/promises";
+import { mkdir, readdir, rm, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { KeyFile } from "./keys.ts";
+import { ApiError } from "./errors.ts";
 import type {
-  Account, AgentObject, ApiKeyRecord, DelegationRecord, EventObject, Handoff, OperatorObject,
+  Account, AgentObject, ApiKeyRecord, CredentialVerification, DelegationRecord, EventObject, Handoff, OperatorObject,
   PolicyObject, SessionRecord, StoredDelegation, TermsObject, WebhookEndpoint,
 } from "../types.ts";
 
@@ -169,6 +170,31 @@ export class Store {
   listDelegations() { return this.list<StoredDelegation>("delegations"); }
   putRecord(r: DelegationRecord) { return this.put("records", r.id, r); }
   getRecord(id: string) { return this.get<DelegationRecord>("records", id); }
+
+  // Credential verification uses atomic replacement and a cross-process, fail-closed lock.
+  // A process crash may leave a lock: create a fresh request, never auto-unlock a live writer.
+  async withCredentialLock<T>(requestId: string, run: () => Promise<T>): Promise<T> {
+    const base = join(this.dir, "credential_locks");
+    await mkdir(base, { recursive: true });
+    const path = join(base, sha(requestId));
+    try { await mkdir(path); } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EEXIST") throw new ApiError(409, "invalid_request_error", "credential_busy", "Verification is already being processed. Retry, or create a fresh request after a crashed writer.");
+      throw e;
+    }
+    try { return await run(); } finally { await rm(path, { recursive: true }); }
+  }
+  async putCredentialVerification(v: CredentialVerification): Promise<void> {
+    const base = join(this.dir, "credential_verifications");
+    await mkdir(base, { recursive: true });
+    const target = join(base, `${this.safe(v.id)}.json`);
+    const temp = `${target}.${crypto.randomUUID()}.tmp`;
+    try { await writeFile(temp, JSON.stringify(v), { mode: 0o600, flag: "wx" }); await rename(temp, target); }
+    finally { await rm(temp, { force: true }); }
+  }
+  getCredentialVerification(id: string) { return this.get<CredentialVerification>("credential_verifications", id); }
+  async listCredentialVerifications(delegation: string) {
+    return (await this.list<CredentialVerification>("credential_verifications")).filter(v => v.delegation === delegation);
+  }
 
   // challenges
   putChallenge(c: StoredChallenge) { return this.put("challenges", c.nonce, c); }

@@ -109,8 +109,10 @@ For each tier, choose what evidence a delegation must carry before a session may
 | --- | --- | --- |
 | `asserted` | The application's signed statement that the consumer accepted is sufficient | Read tier |
 | `observed` | Foil must hold an observed link to a live session for the same consumer at your site | Manage and transact |
-| `presented` | The delegation must carry a verified credential presentation from the consumer. Reserved; no presentation can be recorded in the current version | Onboarding, once available |
+| `presented` | Current institution-accepted W3C credential evidence must be linked to the delegation. The business profile does not prove consumer wallet-key possession | Actions for which you explicitly require an accepted issuer check |
 | `site` | The step must be completed on your site by the consumer | Anything you would not delegate to an application |
+
+Credentials are optional. Configure issuer keys, vocabulary, required claims, and freshness only when you need them; `credentials` alone does not make them required. See [identity and risk credentials](identity-risk-provider.md) for the working API/CLI flow and subject-mapping responsibility.
 
 Handoffs are steps the consumer must complete on your site regardless of tier. Configure one per scope with a mode and the URL of the page on your site that hosts the step.
 

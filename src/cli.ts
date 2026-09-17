@@ -3,6 +3,7 @@ import { UsageError, all, bool, list, num, parseArgs, str, type FlagValue } from
 import { verifyAgent, verifyOperator } from "./lib/certs.ts";
 import { verifyChallenge } from "./lib/challenge.ts";
 import { verifyDelegation } from "./lib/delegation.ts";
+import { issueCredential, presentCredential } from "./lib/credentials.ts";
 import { decode } from "./lib/jwt.ts";
 import { ALGS, generateKeyFile, readKeyFile, type Alg } from "./lib/keys.ts";
 import { Store } from "./lib/store.ts";
@@ -26,6 +27,10 @@ Getting started
   demo [--keep]                                        Run the whole lifecycle against an in-process API
 
 Resources (create, retrieve, list, and the verbs shown)
+  credentials     issue --body @vc.json --key issuer.json --out vc.jwt (offline)
+                  present --credential vc.jwt --request request.json --key issuer.json --out vp.jwt (offline)
+  credential-verifications create --delegation ID --credential-subject URI (institution only)
+                  retrieve ID | complete ID --presentation-file vp.jwt | revoke ID
   agents          create --name N --scopes a,b [--max-amount N] [--currency usd] [--payees existing_only]  |  retrieve ID | list | update ID | deactivate ID
   policies        create --origin O --tier T [--handoff scope=..,mode=..,url=..] [--disclosures @file.json] ...  |  retrieve ID | list [--origin O]
   terms           create --agent ID --origin O --scopes a,b  |  retrieve ID
@@ -125,6 +130,15 @@ async function resourceCommand(resource: string, verb: string | undefined, rest:
   const params = () => paramsFromFlags(flags, ["id"]);
 
   switch (resource) {
+    case "credential-verifications": {
+      if (verb === "create") { out(await aap.credentialVerifications.create(params() as never, ro)); return 0; }
+      if (verb === "retrieve") { out(await aap.credentialVerifications.retrieve(needId())); return 0; }
+      if (verb === "complete") {
+        out(await aap.credentialVerifications.complete(needId(), { presentation: (await readText(str(flags, "presentation-file", true)!)).trim() }, ro)); return 0;
+      }
+      if (verb === "revoke") { out(await aap.credentialVerifications.revoke(needId())); return 0; }
+      break;
+    }
     case "agents": {
       if (verb === "create") {
         const scopes = list(flags, "scopes") ?? (params().ceiling as { scopes?: string[] } | undefined)?.scopes;
@@ -306,6 +320,18 @@ async function main(argv: string[]): Promise<number> {
       await new Promise(() => undefined);
       return 0;
     }
+    case "credentials": {
+      const key = await readKeyFile(str(flags, "key", true)!);
+      let token: string;
+      if (sub === "issue") token = await issueCredential(JSON.parse(await readText(str(flags, "body", true)!.replace(/^@/, ""))), key);
+      else if (sub === "present") token = await presentCredential((await readText(str(flags, "credential", true)!)).trim(), JSON.parse(await readText(str(flags, "request", true)!)), key);
+      else throw new UsageError("usage: credentials issue|present --key FILE --out FILE");
+      const path = str(flags, "out", true)!;
+      // Credentials can contain personal data. Never echo them or overwrite an existing artifact.
+      await (await import("node:fs/promises")).writeFile(path, token, { mode: 0o600, flag: "wx" });
+      out({ object: sub === "issue" ? "verifiable_credential" : "verifiable_presentation", out: path });
+      return 0;
+    }
     case "demo": {
       await runDemo({ store: str(flags, "store"), keep: bool(flags, "keep") });
       return 0;
@@ -343,7 +369,7 @@ async function main(argv: string[]): Promise<number> {
         if (!ALGS.includes(alg)) throw new UsageError("--alg must be ES256 or EdDSA");
         const kf = await generateKeyFile(alg);
         const path = str(flags, "out", true)!;
-        await Bun.write(path, JSON.stringify(kf, null, 2));
+        await (await import("node:fs/promises")).writeFile(path, JSON.stringify(kf, null, 2), { mode: 0o600, flag: "wx" });
         out({ out: path, kid: kf.kid, alg: kf.alg, public: kf.public });
         return 0;
       }

@@ -76,9 +76,8 @@ aap policies create --origin bank.example --tier read --disclosures @bundle.json
 
 For specialist providers or businesses attesting to checks on their own users,
 see [Issue identity and risk credentials](guides/identity-risk-provider.md).
-It describes the proposed W3C VC integration and shows how an institution can
-record an externally validated evidence reference using existing handoff commands.
-The CLI does not yet issue, present, or verify W3C credentials.
+It demonstrates optional W3C VC signing, presentation, institution verification,
+and revocation, separate from application-defined handoff references.
 
 Every resource supports `create`, `retrieve ID`, and `list`, plus the verbs shown. Arguments after the verb are the id; everything else is a flag.
 
@@ -132,6 +131,37 @@ The acceptance file is what the application collected from the consumer:
 ```
 
 The request is signed with the agent's key from the profile before it is sent.
+
+### credentials (offline)
+
+```sh
+aap keys generate --alg ES256 --out issuer.json
+aap credentials issue --body @credential.json --key issuer.json --out vc.jwt
+aap credentials present --credential vc.jwt --request request.json --key issuer.json --out vp.jwt
+```
+
+No API key is required. Private keys stay local. Tokens go to owner-only output
+files, not stdout; existing files are not overwritten. The initial profile supports
+ES256, pinned vocabularies, and short-lived issuer-held presentations, not customer
+wallet proof. See the [integration guide](guides/identity-risk-provider.md) for the
+credential body, institution trust configuration, and authenticated request delivery.
+
+### credential-verifications (institution only)
+
+```sh
+aap --profile site credential-verifications create --delegation dl_ID --credential-subject urn:uuid:CUSTOMER
+aap --profile site credential-verifications retrieve cv_ID
+aap --profile site credential-verifications complete cv_ID --presentation-file vp.jwt
+aap --profile site credential-verifications revoke cv_ID
+```
+
+The request lasts five minutes and binds the institution, policy version, customer
+mapping, and delegation. Completion verifies both W3C signatures, claims, freshness,
+and challenge bindings. Use the same `--idempotency-key` for an uncertain identical
+completion retry; retrieve the object for current state rather than treating a
+cached response as a new authorization. Attestations are optional unless a tier's
+policy explicitly requires `presented` evidence. Run `bun examples/credentials.ts`
+for a complete real-CLI demonstration, or add `--first-party` for an agent-company issuer.
 
 ### sessions
 

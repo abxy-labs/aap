@@ -1,12 +1,13 @@
 import type { AgentBlock, AgentClaims, DelegationClaims, DowngradeReason, DowngradedBlock, GrantClaims, HandoffConfig, OperatorClaims, SessionRecord } from "../types.ts";
 import { verifyAgent, verifyOperator } from "./certs.ts";
 import { intersectConstraints } from "./constraints.ts";
+import { activeCredentialEvidence } from "./credentials.ts";
 import { delegationWithinCeiling, verifyDelegation } from "./delegation.ts";
 import { parseHeader } from "./grant.ts";
 import { TYP, decode, nowSeconds, verify } from "./jwt.ts";
 import type { KeyFile } from "./keys.ts";
 import { admitsAgents, agentAllowed, handoffFor, loadPolicy, operatorAllowed } from "./policy.ts";
-import { isSubset, maxTier, withinTier } from "./scopes.ts";
+import { isSubset, maxTier, tierOf, withinTier } from "./scopes.ts";
 import { Store, iso } from "./store.ts";
 
 export interface VerifyInput {
@@ -129,8 +130,9 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
     if (required === "observed" && !delegation.record.observed) {
       throw new Downgrade("evidence_insufficient", `${top} tier requires an observed session link and the delegation has only asserted evidence`);
     }
-    if (required === "presented" && !delegation.record.presented) {
-      throw new Downgrade("evidence_insufficient", `${top} tier requires a presented credential and the delegation has none`);
+    const presented = await activeCredentialEvidence(store, delegation.sub, policy, now.getTime() / 1000);
+    if (effective.some(s => { const tier = tierOf(s); return tier && policy.evidence[tier] === "presented"; }) && !presented) {
+      throw new Downgrade("evidence_insufficient", "A granted scope requires current institution-accepted credential evidence");
     }
 
     const bound = await store.getGrantBinding(grant.jti);
@@ -172,7 +174,7 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
           channel: delegation.record.asserted.channel,
         },
         observed: delegation.record.observed,
-        presented: delegation.record.presented ?? null,
+        presented,
       },
       handoff: null,
       approvals: existing?.agent && "approvals" in existing.agent ? existing.agent.approvals : [],

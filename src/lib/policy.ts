@@ -1,5 +1,6 @@
 import type { Constraints, CredentialPolicy, DisclosureBundle, Evidence, HandoffConfig, HandoffMode, PolicyClaims, PolicyObject, Tier } from "../types.ts";
 import { validateConstraints } from "./constraints.ts";
+import { validateCredentialPolicy } from "./credentials.ts";
 import { invalid } from "./errors.ts";
 import { TYP, nowSeconds, sign, verify } from "./jwt.ts";
 import type { KeyFile } from "./keys.ts";
@@ -27,6 +28,7 @@ const EVIDENCE: Evidence[] = ["asserted", "observed", "presented", "site"];
 const MODES: HandoffMode[] = ["approve", "complete"];
 
 export async function setPolicy(store: Store, root: KeyFile, input: PolicyInput): Promise<PolicyObject> {
+  await validateCredentialPolicy(input.credentials);
   if (input.tier !== "none" && !TIERS.includes(input.tier)) throw invalid("invalid_tier", `Unknown tier '${input.tier}'. Use observe, read, manage, transact, or none.`, "tier");
   if (input.tier === "control") throw invalid("invalid_tier", "The control tier cannot be a policy ceiling.", "tier");
   const constraints = input.constraints ?? {};

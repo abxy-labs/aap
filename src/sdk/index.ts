@@ -8,7 +8,7 @@ import { decode } from "../lib/jwt.ts";
 import { generateKeyFile, type Alg, type KeyFile } from "../lib/keys.ts";
 import { id as newId } from "../lib/store.ts";
 import type {
-  Acceptance, Account, AgentClaims, AgentObject, Ceiling, DelegationClaims, DelegationObject, EventObject, Handoff, OperatorObject,
+  Acceptance, Account, AgentClaims, AgentObject, Ceiling, CredentialVerification, DelegationClaims, DelegationObject, EventObject, Handoff, OperatorObject,
   PolicyObject, SessionRecord, TermsObject, WebhookEndpoint,
 } from "../types.ts";
 
@@ -198,6 +198,15 @@ export class Aap {
   };
 
   // ---------------------------------------------------------------- sessions
+  /** Institution-only verification. Issuer signing remains offline. */
+  readonly credentialVerifications = {
+    create: (params: { delegation: string; credential_subject: string }, opts?: RequestOptions) => this.post<CredentialVerification>("/v1/credential_verifications", params, opts),
+    retrieve: (id: string) => this.get<CredentialVerification>(`/v1/credential_verifications/${id}`),
+    complete: (id: string, params: { presentation: string }, opts?: RequestOptions) => this.post<CredentialVerification>(`/v1/credential_verifications/${id}/complete`, params, opts),
+    revoke: (id: string) => this.post<CredentialVerification>(`/v1/credential_verifications/${id}/revoke`),
+  };
+
+  // ---------------------------------------------------------------- sessions
   readonly sessions = {
     retrieve: (id: string, opts?: RequestOptions) => this.get<SessionRecord>(`/v1/sessions/${id}`, {}, opts),
     list: (params: Params = {}, opts?: RequestOptions) => this.get<ListResponse<SessionRecord>>("/v1/sessions", params, opts),
@@ -325,3 +334,5 @@ export class Aap {
 
 export type { KeyFile } from "../lib/keys.ts";
 export { generateKeyFile, readKeyFile } from "../lib/keys.ts";
+export { issueCredential, presentCredential, VC_CONTEXT } from "../lib/credentials.ts";
+export type { CredentialPolicy, CredentialTrust, CredentialVerification } from "../types.ts";

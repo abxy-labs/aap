@@ -7,6 +7,7 @@ import { API_VERSION, errorBody, expand } from "./envelope.ts";
 import { accountRoutes } from "./resources/accounts.ts";
 import { agentRoutes } from "./resources/agents.ts";
 import { delegationRoutes } from "./resources/delegations.ts";
+import { credentialVerificationRoutes } from "./resources/credential_verifications.ts";
 import { directoryRoutes } from "./resources/directory.ts";
 import { eventRoutes } from "./resources/events.ts";
 import { handoffRoutes } from "./resources/handoffs.ts";
@@ -47,6 +48,7 @@ export async function createApp(baseStore: Store): Promise<App> {
   policyRoutes(router);
   termsRoutes(router);
   delegationRoutes(router);
+  credentialVerificationRoutes(router);
   sessionRoutes(router);
   handoffRoutes(router);
   eventRoutes(router);
@@ -136,7 +138,7 @@ export async function createApp(baseStore: Store): Promise<App> {
       errorCode = err.code;
       if (!(e instanceof ApiError)) console.error(`[${requestId}]`, e);
       const body = errorBody(err, requestId);
-      if (idempotency) {
+      if (idempotency && err.code !== "credential_busy") {
         await idempotency.store.putIdempotency(idempotency.account, idempotency.key, { request_hash: idempotency.requestHash, status, body, created: Math.floor(Date.now() / 1000) });
       }
       return json(body, err.status, requestId);

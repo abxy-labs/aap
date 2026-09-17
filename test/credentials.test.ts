@@ -3,7 +3,7 @@ import { ORIGIN, makeDelegation, makePresentation, makeWorld, verifyAt } from ".
 import { loadPolicy, setPolicy } from "../src/lib/policy.ts";
 import type { AgentBlock } from "../src/types.ts";
 
-describe("reserved credential fields", () => {
+describe("optional credential compatibility", () => {
   const worlds: Awaited<ReturnType<typeof makeWorld>>[] = [];
   afterAll(async () => { for (const w of worlds) await w.store.destroy(); });
 

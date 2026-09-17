@@ -80,6 +80,32 @@ export interface CredentialPolicy {
   types: string[];
   issuers: string[];
   claims: string[];
+  /** Explicit institution trust, never discovered from an untrusted token. */
+  trust?: CredentialTrust[];
+}
+
+export interface CredentialTrust {
+  issuer: string;
+  type: string;
+  key: JsonWebKey & { kid: string };
+  /** Exact, locally pinned vocabulary; no remote context loading. */
+  context: Record<string, string>;
+  claims: Record<string, string | number | boolean>;
+  max_age_s: number;
+}
+
+export interface CredentialVerification extends ObjectBase {
+  object: "credential_verification";
+  delegation: string;
+  origin: string;
+  credential_subject: string;
+  policy_version: number;
+  policy_hash: string;
+  audience: string;
+  nonce: string;
+  expires_at: number;
+  status: "pending" | "verified" | "revoked";
+  evidence: PresentedEvidence | null;
 }
 
 export interface PresentedEvidence {
@@ -88,6 +114,8 @@ export interface PresentedEvidence {
   holder_bound: boolean;
   claims: Record<string, unknown>;
   verified_at: string;
+  verification?: string;
+  expires_at?: number;
 }
 
 export type HandoffMode = "approve" | "complete";

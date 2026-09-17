@@ -16,7 +16,7 @@ Three properties hold throughout. Foil never presents an interface to a consumer
   - [Integrate an operator](docs/guides/operator.md), for a company that runs browsers for agents.
   - [Integrate an agent application](docs/guides/agent-app.md), for the product a consumer talks to.
   - [Integrate an embedded provider](docs/guides/embedded-provider.md), for a component that runs inside other companies' flows.
-  - [Issue identity and risk credentials](docs/guides/identity-risk-provider.md), for specialist providers and businesses checking their own users; covers the proposed W3C VC integration and today's reference flow.
+  - [Issue identity and risk credentials](docs/guides/identity-risk-provider.md), for specialist providers and businesses checking their own users; covers the optional W3C VC integration and the reference CLI walkthrough.
 - [examples/lifecycle.sh](examples/lifecycle.sh): every command in order against a running reference API.
 
 ## Quick start
@@ -72,7 +72,7 @@ src/server/           the reference API: router, auth, envelope, resources
 src/lib/              protocol objects, verification, handoffs, events, the store
 src/types.ts          object and claim shapes
 test/                 library, downgrade-reason, and API tests
-examples/             shell walkthrough
+examples/             shell and credential walkthroughs
 ```
 
 ## Tests
@@ -81,7 +81,14 @@ examples/             shell walkthrough
 bun test
 ```
 
-Covers the lifecycle, every downgrade reason, the reserved credential fields, key interoperability, and the API end to end: conventions, errors, idempotency, pagination, expansion, delegations, sessions, handoffs in both modes, identity verification, test agents, events, and webhook signatures.
+Covers the lifecycle, every downgrade reason, optional W3C credential issuance, presentation, verification, replay/expiry/revocation, issuer trust, and no-attestation compatibility, key interoperability, and the API end to end: conventions, errors, idempotency, pagination, expansion, delegations, sessions, handoffs in both modes, identity verification, test agents, events, and webhook signatures.
+
+For the full optional credential flow with both types of issuer:
+
+```sh
+bun examples/credentials.ts
+bun examples/credentials.ts --first-party
+```
 
 ## Status
 
