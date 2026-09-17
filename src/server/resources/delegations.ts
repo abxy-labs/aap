@@ -1,9 +1,10 @@
-import type { Acceptance, StoredDelegation } from "../../types.ts";
+import type { Acceptance, Attestation, StoredDelegation } from "../../types.ts";
+import type { DelegationShape } from "../../lib/attestations.ts";
 import { verifyOperator } from "../../lib/certs.ts";
 import { createDelegation, delegationSigningPayload, effectiveStatus, revokeDelegation, verifyRequestSignature } from "../../lib/delegation.ts";
-import { forbidden, notFound } from "../../lib/errors.ts";
+import { forbidden, invalid, notFound } from "../../lib/errors.ts";
 import { emitEvent } from "../../lib/events.ts";
-import { acceptAttestation, agentSigningKey, operatorSigningKey } from "../../lib/attestations.ts";
+import { agentSigningKey, delegationSubject, operatorSigningKey, prepareAttestation, recordAttestations } from "../../lib/attestations.ts";
 import { loadPolicy } from "../../lib/policy.ts";
 import { ownsOrigin, requireType } from "../auth.ts";
 import { paginate, present } from "../envelope.ts";
@@ -48,6 +49,29 @@ export function delegationRoutes(r: Router): void {
       attestations: list(body, "attestations") ?? null,
     };
     await verifyRequestSignature(delegationSigningPayload(req), signature, agent.public_key as never);
+
+    // Credentials the operator already holds ride along with the delegation, so a site needs no
+    // separate exchange. They are verified against a delegation that does not exist yet, so an
+    // invalid one fails the request before anything is written.
+    const credentials = req.attestations ?? [];
+    let prepared: Attestation[] = [];
+    if (credentials.length) {
+      const policy = await loadPolicy(store, root, req.origin);
+      if (!policy) throw invalid("origin_not_participating", `${req.origin} does not admit agents.`, "origin");
+      const admitsOperator = policy.attestations?.issuers.includes("operator") ?? false;
+      const pending: DelegationShape = {
+        id: "", agent: agentId, operator: operator.sub, origin: req.origin, subject: req.subject,
+      };
+      prepared = await Promise.all(credentials.map((credential) => prepareAttestation(store, {
+        delegation: pending,
+        policy,
+        credential,
+        submittedBy: "operator",
+        operatorKey: admitsOperator ? operatorSigningKey(operator) : undefined,
+        agentKey: admitsOperator ? agentSigningKey(claims) : undefined,
+      })));
+    }
+
     const d = await createDelegation(store, root, {
       agent: claims,
       operator,
@@ -60,14 +84,10 @@ export function delegationRoutes(r: Router): void {
       siteSession: req.site_session ?? undefined,
       metadata: metadata(body),
     });
-    // Credentials the operator already holds ride along with the delegation, so a site needs no separate exchange.
-    for (const credential of req.attestations ?? []) {
-      const policy = (await loadPolicy(store, root, req.origin))!;
-      const admitsOperator = policy.attestations?.issuers.includes("operator") ?? false;
-      const operatorKey = admitsOperator ? operatorSigningKey(operator) : undefined;
-      const agentKey = admitsOperator ? agentSigningKey(claims) : undefined;
-      const a = await acceptAttestation(store, { delegation: d, policy, credential, submittedBy: "operator", operatorKey, agentKey });
-      await emitEvent(store, "attestation.created", a, { id: ctx.requestId });
+    if (prepared.length) {
+      for (const a of prepared) a.delegation = d.id;
+      await recordAttestations(store, d.id, prepared);
+      for (const a of prepared) await emitEvent(store, "attestation.created", a, { id: ctx.requestId });
     }
     const created = (await store.getDelegation(d.id))!;
     await emitEvent(store, "delegation.created", present(created), { id: ctx.requestId, idempotency_key: ctx.idempotencyKey ?? undefined });

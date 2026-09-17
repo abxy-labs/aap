@@ -87,7 +87,7 @@ Two kinds of issuer can write one, and both produce the same object. An **identi
 
 A credential reaches the site by one of two paths, whichever suits the parties. An operator that already holds one attaches it when it creates the delegation, so the site needs no exchange with anyone. A provider that would rather deliver its own posts it against the delegation id it was given. Foil verifies the signature against the keys registered for the issuer the credential names, checks the subject, the type, the required claims, and the age against the site's policy, and records an attestation. Only the claims the site's policy names are kept; everything else in the credential is discarded, and the credential itself is not retained.
 
-An attestation stops satisfying a policy when it is revoked by the site or the issuer, when its validity passes, or when the site tightens its policy past what the attestation carries. Sessions are checked at binding and again at each scope use, so revocation takes effect without waiting for the delegation to expire.
+An attestation stops satisfying a policy when it is revoked by the site or the issuer that signed it, when its validity passes, or when the site changes its policy past what the attestation carries, including removing the issuer from the ones it accepts. Sessions are checked at binding and again at each scope use, so revocation takes effect without waiting for the delegation to expire.
 
 Attestations are optional. A site that requires none is unaffected, and a site that configures which it accepts still requires none until a tier's evidence level says `attested`.
 

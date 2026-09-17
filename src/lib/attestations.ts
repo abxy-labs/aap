@@ -12,8 +12,11 @@ export function delegationSubject(d: { operator: string; subject: string }): str
   return `${SUBJECT_PREFIX}${d.operator}:${d.subject}`;
 }
 
+/** What a delegation must look like to check a credential against it: it need not exist yet. */
+export type DelegationShape = Pick<StoredDelegation, "id" | "agent" | "operator" | "origin" | "subject">;
+
 export interface AcceptInput {
-  delegation: StoredDelegation;
+  delegation: DelegationShape;
   policy: PolicyClaims;
   credential: string;
   submittedBy: Attestation["submitted_by"];
@@ -26,7 +29,7 @@ export interface AcceptInput {
 }
 
 /** Resolve the keys a credential may be signed with, from the site's policy and the registry. */
-async function candidateKeys(store: Store, policy: AttestationPolicy, delegation: StoredDelegation, operatorKey?: JWK & { kid: string }, agentKey?: JWK & { kid: string }): Promise<IssuerKey[]> {
+async function candidateKeys(store: Store, policy: AttestationPolicy, delegation: DelegationShape, operatorKey?: JWK & { kid: string }, agentKey?: JWK & { kid: string }): Promise<IssuerKey[]> {
   const keys: IssuerKey[] = [];
   for (const name of policy.issuers) {
     // "operator" admits the delegation's own operator and the agent acting under it, which is how an
@@ -43,8 +46,12 @@ async function candidateKeys(store: Store, policy: AttestationPolicy, delegation
   return keys;
 }
 
-/** Verify a credential and record it against the delegation. */
-export async function acceptAttestation(store: Store, input: AcceptInput): Promise<Attestation> {
+/**
+ * Verify a credential against the site's policy and build the attestation it would produce, without
+ * writing anything. The delegation need not exist yet, which is what lets credentials submitted with
+ * a delegation be checked before any of it is persisted.
+ */
+export async function prepareAttestation(store: Store, input: AcceptInput): Promise<Attestation> {
   const t = input.now ?? now();
   const policy = input.policy.attestations;
   if (!policy) throw invalid("attestations_not_accepted", `${input.delegation.origin} does not accept attestations. The site must configure them first.`, "credential");
@@ -75,8 +82,19 @@ export async function acceptAttestation(store: Store, input: AcceptInput): Promi
     revoked_at: null,
     revoked_by: null,
   };
-  await store.putAttestation(a);
-  await refreshDelegationEvidence(store, input.delegation.id, t);
+  return a;
+}
+
+/** Persist prepared attestations and refresh the delegation's evidence. */
+export async function recordAttestations(store: Store, delegation: string, prepared: Attestation[], t = now()): Promise<void> {
+  for (const a of prepared) await store.putAttestation(a);
+  await refreshDelegationEvidence(store, delegation, t);
+}
+
+/** Verify a credential and record it against an existing delegation. */
+export async function acceptAttestation(store: Store, input: AcceptInput): Promise<Attestation> {
+  const a = await prepareAttestation(store, input);
+  await recordAttestations(store, input.delegation.id, [a], input.now ?? now());
   return a;
 }
 
@@ -108,14 +126,33 @@ export async function refreshDelegationEvidence(store: Store, delegation: string
   return evidence;
 }
 
+/**
+ * Whether an attestation's issuer is one the policy accepts as it stands now. An issuer the site has
+ * since removed stops satisfying the policy, which is why this is re-resolved rather than trusted
+ * from when the attestation was accepted.
+ */
+async function issuerAccepted(store: Store, a: Attestation, p: AttestationPolicy, delegation: StoredDelegation | null): Promise<boolean> {
+  for (const name of p.issuers) {
+    if (name === "operator") {
+      if (delegation && (a.issuer === delegation.operator || a.issuer === delegation.agent)) return true;
+      continue;
+    }
+    const issuer = await store.getIssuer(name);
+    if (issuer && issuer.status === "active" && issuer.url === a.issuer) return true;
+  }
+  return false;
+}
+
 /** Whether the delegation carries an attestation that satisfies the site's policy. */
 export async function satisfiesAttested(store: Store, delegation: string, policy: PolicyClaims, t = now()): Promise<AttestedEvidence | null> {
   const p = policy.attestations;
   if (!p) return null;
+  const d = await store.getDelegation(delegation);
   for (const a of await activeAttestations(store, delegation, t)) {
     if (!p.types.includes(a.type)) continue;
     if (p.claims.some((c) => !(c in a.claims))) continue;
     if (p.max_age_s !== undefined && t - a.issued_at > p.max_age_s) continue;
+    if (!(await issuerAccepted(store, a, p, d))) continue;
     return toEvidence(a);
   }
   return null;

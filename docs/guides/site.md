@@ -141,7 +141,7 @@ Some actions need more than the consumer's consent. Opening an account may need 
 }
 ```
 
-`issuers` names the providers you accept by id, and `"operator"` accepts credentials signed by the delegation's own operator or its agents, which is how an agent application states a check it performed itself. Decide those separately: you may trust a specialist provider for an identity document and an application for an email round trip, and not the reverse. `claims` names the claims a credential must carry, and those are the only claims kept; everything else in the credential is discarded. `max_age_s` refuses a credential issued longer ago than that, even if it has not expired.
+`issuers` names the providers you accept by id, and `"operator"` accepts credentials signed by the delegation's own operator or its agents, which is how an agent application states a check it performed itself. Decide those separately: you may trust a specialist provider for an identity document and an application for an email round trip, and not the reverse. `claims` names the claims a credential must carry, and those are the only claims kept; everything else in the credential is discarded. `max_age_s` refuses a credential issued longer ago than that, even if it has not expired. Removing an issuer from the list stops its existing attestations from counting, at the next session binding or scope use.
 
 Configuring this requires nothing. Until a tier's evidence says `attested`, sessions bind exactly as before.
 

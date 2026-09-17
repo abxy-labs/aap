@@ -101,13 +101,13 @@ Only the claims the site's policy names are kept. Everything else in the credent
 
 ## Step 4: Revoke when the check no longer holds
 
-Either you or the site can revoke. A revoked attestation stops satisfying the site's policy at the next session binding or scope use.
+You or the site can revoke, and only you: an operator that passed your credential through cannot withdraw your statement, and another provider cannot touch it. A revoked attestation stops satisfying the site's policy at the next session binding or scope use.
 
 ```
 POST /v1/attestations/att_4Kq2m/revoke
 ```
 
-An attestation also stops counting when its `validUntil` passes, or when the site tightens its policy past what the attestation carries. Issue a short validity when the check is time-sensitive rather than relying on revocation.
+An attestation also stops counting when its `validUntil` passes, when the site tightens its policy past what the attestation carries, or when the site removes you from the issuers it accepts. Issue a short validity when the check is time-sensitive rather than relying on revocation.
 
 ## Test it locally
 

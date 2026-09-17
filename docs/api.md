@@ -380,7 +380,7 @@ POST /v1/delegations/:id/attestations     { "credential": "eyJ…" }
 
 An operator may submit against its own delegations. An issuer account may submit against any delegation whose id it has been given, which is what lets a provider deliver its own statement; it cannot read the delegation. A site may submit against delegations at its origins.
 
-An operator can also attach credentials when it creates the delegation, which avoids a second call and any exchange with the site:
+An operator can also attach credentials when it creates the delegation, which avoids a second call and any exchange with the site. Every credential is verified before the delegation is written, so an invalid one fails the whole request and leaves nothing behind:
 
 ```
 POST /v1/delegations     { …, "attestations": ["eyJ…"] }
@@ -396,7 +396,9 @@ GET  /v1/attestations?delegation=&origin=&issuer=&status=
 POST /v1/attestations/:id/revoke
 ```
 
-The site and the issuing provider can revoke; the operator cannot. A revoked attestation stops satisfying a policy at the next session binding or scope use.
+An attestation is visible to the three parties to it: the site whose origin it is at, the operator whose delegation it is on, and the issuer that signed it. No other account can read or list it.
+
+The site and the issuer that signed it can revoke; an operator that merely passed a credential through cannot withdraw the issuer's statement. A revoked attestation stops satisfying a policy at the next session binding or scope use, as does one whose issuer the site has since removed from its policy.
 
 ## Issuers
 

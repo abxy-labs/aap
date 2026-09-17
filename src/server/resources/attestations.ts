@@ -16,16 +16,28 @@ function notFoundDelegation(id: string): never {
   throw notFound("delegation", id);
 }
 
-function canSee(ctx: Ctx, a: Attestation): boolean {
+/**
+ * Who may see an attestation: the site whose origin it is at, the operator whose delegation it is
+ * on, and the issuer that signed it. An attestation names a delegation, a pseudonymous subject, and
+ * the claims a site kept, so it is visible only to those three.
+ */
+async function canSee(ctx: Ctx, a: Attestation): Promise<boolean> {
   const acct = ctx.principal!.account;
   if (ownsOrigin(ctx.principal!, a.origin)) return true;
-  if (acct.type === "issuer") return a.submitted_by === "issuer";
-  return acct.type === "operator";
+  if (acct.type === "operator") {
+    const d = await ctx.store.getDelegation(a.delegation);
+    return !!d && !!acct.operator && d.operator === acct.operator;
+  }
+  if (acct.type === "issuer" && acct.issuer) {
+    const issuer = await ctx.store.getIssuer(acct.issuer);
+    return !!issuer && issuer.url === a.issuer;
+  }
+  return false;
 }
 
 async function load(ctx: Ctx, id: string): Promise<Attestation> {
   const a = await ctx.store.getAttestation(id);
-  if (!a || !canSee(ctx, a)) throw notFound("attestation", id);
+  if (!a || !(await canSee(ctx, a))) throw notFound("attestation", id);
   const status = effectiveAttestationStatus(a);
   if (status !== a.status) {
     a.status = status;
@@ -92,7 +104,10 @@ export function attestationRoutes(r: Router): void {
 
   r.add("GET", "/v1/attestations", async (ctx) => {
     const q = ctx.query;
-    const all = (await ctx.store.listAttestations()).filter((a) => canSee(ctx, a));
+    const all: Attestation[] = [];
+    for (const a of await ctx.store.listAttestations()) {
+      if (await canSee(ctx, a)) all.push(a);
+    }
     const filtered = all.filter((a) =>
       (!q.get("delegation") || a.delegation === q.get("delegation")) &&
       (!q.get("origin") || a.origin === q.get("origin")!.toLowerCase()) &&
@@ -105,8 +120,11 @@ export function attestationRoutes(r: Router): void {
   r.add("POST", "/v1/attestations/:id/revoke", async (ctx) => {
     const a = await load(ctx, ctx.params.id!);
     const acct = ctx.principal!.account;
-    const mine = ownsOrigin(ctx.principal!, a.origin) || (acct.type === "issuer" && !!acct.issuer);
-    if (!mine) throw forbidden("Only the site or the issuing provider can revoke an attestation.");
+    // The site whose origin it is at, or the issuer that actually signed it. An operator that merely
+    // passed a credential through cannot withdraw the issuer's statement.
+    const issuer = acct.type === "issuer" && acct.issuer ? await ctx.store.getIssuer(acct.issuer) : null;
+    const mine = ownsOrigin(ctx.principal!, a.origin) || (!!issuer && issuer.url === a.issuer);
+    if (!mine) throw forbidden("Only the site or the issuer that signed it can revoke an attestation.");
     if (a.status === "revoked") return a;
     a.status = "revoked";
     a.revoked_at = now();

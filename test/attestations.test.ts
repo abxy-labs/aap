@@ -248,6 +248,92 @@ describe("what is refused", () => {
   });
 });
 
+describe("who can see and revoke", () => {
+  test("an unrelated operator and an unrelated issuer cannot read an attestation", async () => {
+    const d = await makeDelegation();
+    const a = await provider.attestations.create(d.id, { credential: await providerCredential(d) });
+
+    // A second operator, with its own agents and delegations, is not party to this one.
+    const other = await anon.accounts.create({ type: "operator", name: "Other Browser Co" });
+    const otherOperator = clientFor(other.keys.test);
+    expect((await otherOperator.attestations.retrieve(a.id).then(() => null, (e) => e as AapError))!.status).toBe(404);
+    expect((await otherOperator.attestations.list()).data.some((x) => x.id === a.id)).toBe(false);
+
+    // A second provider did not sign it.
+    const otherKey = await generateKeyFile();
+    const otherIssuer = await anon.accounts.create({ type: "issuer", name: "Rival Identity", url: "https://rival.example", public_keys: [otherKey.public] });
+    const rival = clientFor(otherIssuer.keys.test);
+    expect((await rival.attestations.retrieve(a.id).then(() => null, (e) => e as AapError))!.status).toBe(404);
+    expect((await rival.attestations.list()).data.some((x) => x.id === a.id)).toBe(false);
+
+    // The parties to it can.
+    expect((await site.attestations.retrieve(a.id)).id).toBe(a.id);
+    expect((await operator.attestations.retrieve(a.id)).id).toBe(a.id);
+    expect((await provider.attestations.retrieve(a.id)).id).toBe(a.id);
+  });
+
+  test("an issuer cannot revoke an attestation it did not sign", async () => {
+    const d = await makeDelegation();
+    const a = await provider.attestations.create(d.id, { credential: await providerCredential(d) });
+    const otherKey = await generateKeyFile();
+    const otherIssuer = await anon.accounts.create({ type: "issuer", name: "Rival Identity 2", url: "https://rival2.example", public_keys: [otherKey.public] });
+    const rival = clientFor(otherIssuer.keys.test);
+    // It cannot even see it, so revocation fails before the ownership check.
+    expect((await rival.attestations.revoke(a.id).then(() => null, (e) => e as AapError))!.status).toBe(404);
+    expect((await site.attestations.retrieve(a.id)).status).toBe("active");
+    // The issuer that signed it can.
+    expect((await provider.attestations.revoke(a.id)).revoked_by).toBe("issuer");
+  });
+});
+
+describe("policy changes", () => {
+  test("dropping an issuer stops its existing attestations from satisfying the policy", async () => {
+    const d = await makeDelegation();
+    await provider.attestations.create(d.id, { credential: await providerCredential(d) });
+    expect((await bind(d, "sess_before")).status_header).toBe("Foil-Agent-Status: bound");
+
+    // Same types and claims, but the provider is no longer accepted.
+    await setPolicy({ attestations: { issuers: ["operator"], types: ["EmailControlCredential"], claims: ["email_verified"] } });
+    expect((await bind(d, "sess_after")).status_header).toBe("Foil-Agent-Status: downgraded; reason=evidence_insufficient");
+
+    // A bound session loses it at the next scope use too.
+    await setPolicy();
+    await bind(d, "sess_live");
+    await setPolicy({ attestations: { issuers: ["operator"], types: ["EmailControlCredential"], claims: ["email_verified"] } });
+    const used = await operator.test.sessions.use("sess_live", { scope: "accounts:read" });
+    expect((used.agent as { reason: string }).reason).toBe("evidence_insufficient");
+    await setPolicy();
+  });
+});
+
+describe("inline attestations are all or nothing", () => {
+  test("an invalid credential fails the request and writes no delegation", async () => {
+    const terms = await operator.terms.create({ agent: agent.id, origin: ORIGIN, scopes: ["accounts:read"] });
+    const subject = `usr_${id("s")}`;
+    const operatorId = (await operator.account.retrieve()).operator!.id;
+    const good = await issueCredential(credentialBody({
+      issuer: PROVIDER, type: "EmailControlCredential", subject: `urn:aap:subject:${operatorId}:${subject}`,
+      claims: { email_verified: true }, validUntil: new Date(Date.now() + 86_400_000),
+    }), providerKey);
+    const forged = await issueCredential(credentialBody({
+      issuer: PROVIDER, type: "EmailControlCredential", subject: `urn:aap:subject:${operatorId}:${subject}`,
+      claims: { email_verified: true }, validUntil: new Date(Date.now() + 86_400_000),
+    }), await generateKeyFile());
+
+    const before = (await operator.delegations.list({ limit: 100 })).data.length;
+    const attestationsBefore = (await operator.attestations.list({ limit: 100 })).data.length;
+    const err = await operator.delegations.create({
+      agent: agent.id, origin: ORIGIN, subject, terms: terms.id, intent: "Check balances",
+      acceptance: { terms: terms.id, acknowledged: ["esign", "share"], viewed: ["esign", "privacy"], channel: "test", accepted_at: new Date().toISOString(), copies_sent_to: "email" },
+      // The valid one is listed first, so a per-credential loop would have written it before failing.
+      attestations: [good, forged],
+    }).then(() => null, (e) => e as AapError);
+    expect(err!.code).toBe("credential_invalid");
+    expect((await operator.delegations.list({ limit: 100 })).data.length).toBe(before);
+    expect((await operator.attestations.list({ limit: 100 })).data.length).toBe(attestationsBefore);
+  });
+});
+
 describe("privacy and events", () => {
   test("no raw credential, unnamed claim, or personal value is stored or emitted", async () => {
     const d = await makeDelegation();
