@@ -1,6 +1,6 @@
 # Site discovery
 
-An site MAY publish `GET https://<site-origin>/.well-known/aap`
+A site MAY publish `GET https://<site-origin>/.well-known/aap`
 to let operators discover its AAP service. This is a draft well-known suffix,
 not an assertion of an IANA registration. Discovery is optional: operators
 with an explicitly configured service can continue using it, and the existing
@@ -8,7 +8,7 @@ directory and signed-challenge flow remain supported.
 
 The site hosts the document on its own HTTPS origin. The advertised
 service may be operated by Foil or another implementation of the advertised
-API version. Publishing metadata does not enroll an site, create a
+API version. Publishing metadata does not enroll a site, create a
 policy, grant access, or verify an issuer. The reference server still requires
 account onboarding, API credentials, a participating policy, customer consent,
 and the normal signed challenge and grant verification.
@@ -22,11 +22,10 @@ and the normal signed challenge and grant verification.
   "origin": "https://bank.example",
   "api_version": "2026-09-15",
   "api_base": "https://aap.example",
-  "capabilities": ["delegations", "handoffs"],
+  "capabilities": ["authorizations", "customer_actions"],
   "endpoints": {
-    "terms": "https://aap.example/v1/terms",
-    "delegations": "https://aap.example/v1/delegations",
-    "handoffs": "https://aap.example/v1/handoffs"
+    "authorizations": "https://aap.example/v1/authorizations",
+    "customer_actions": "https://aap.example/v1/customer_actions"
   },
   "jwks_uri": "https://aap.example/.well-known/foil-root"
 }
@@ -40,7 +39,7 @@ and the normal signed challenge and grant verification.
 - `api_base` identifies the API service origin, without a path, query,
   fragment, or URL credentials. All endpoint URLs MUST match the paths above
   under that service. Alternate paths/transports need a future profile version.
-- `capabilities` lists what the service supports. This version defines `delegations` and `handoffs`, and a document must advertise both. Later versions may add capabilities; a client that does not recognize one fails validation rather than guessing.
+- `capabilities` lists what the service supports. This version defines `authorizations` and `customer_actions`, and a document must advertise both. Later versions may add capabilities; a client that does not recognize one fails validation rather than guessing.
 - `jwks_uri` points to the service's existing `/.well-known/foil-root` public
   key set. Discovery does not fetch it or automatically trust it. It is not a
   list of accepted credential issuers. Those issuers and keys remain explicitly
@@ -49,7 +48,7 @@ and the normal signed challenge and grant verification.
 Responses MUST be JSON (`Content-Type: application/json`) and contain public
 metadata only. Do not put private keys, API tokens, customer data, full policies,
 issuer allowlists, or customer-specific permissions here. Current terms and
-requirements are returned by authenticated `POST /v1/terms` for a known agent
+requirements are returned by authenticated `POST /v1/authorizations` for a known agent
 and site. Unknown top-level fields do not confer behavior; the client
 returns only supported public fields. Unknown capabilities fail validation.
 
@@ -107,12 +106,14 @@ const profile = await discover("https://bank.example");
 // Review/allowlist the service first. Use a key issued for that service;
 // do not send an existing Foil key to an arbitrary discovered endpoint.
 const aap = new Aap(keyForApprovedService, { apiBase: profile.api_base });
-const terms = await aap.terms.create({
+const authorization = await aap.authorizations.create({
   agent: agentRegisteredAtThatService,
   origin: profile.origin,
+  subject: "customer_7Hn4kQp2",
+  intent: "Review my account balances",
   scopes: ["accounts:read"],
 });
-// Continue through customer consent, delegation, and signed challenge/grant.
+// Display authorization.consent, accept that revision, then browser.connect().
 ```
 
 `aap.discover(origin)` is also available on an SDK instance. Neither helper
@@ -149,5 +150,5 @@ untrusted endpoint. Explicit service configuration remains a separate choice.
   challenge remains required by the reference grant-signing/verification flow.
 
 Run `bun test test/discovery.test.ts` for public hosting, cache behavior,
-SDK/CLI discovery, authenticated terms integration, malformed-response handling,
+SDK/CLI discovery, authenticated authorization integration, malformed-response handling,
 and non-disclosure/trust-boundary coverage.

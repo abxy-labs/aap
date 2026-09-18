@@ -1,4 +1,3 @@
-export type Tier = "observe" | "read" | "manage" | "transact" | "control";
 
 /** Amounts are integers in the minor unit of `currency` (cents for USD). */
 export interface Constraints {
@@ -146,11 +145,11 @@ export interface PresentedEvidence {
   verified_at: string;
 }
 
-export type HandoffMode = "approve" | "complete";
+export type CustomerActionMode = "approve" | "complete";
 
-export interface HandoffConfig {
+export interface CustomerActionConfig {
   scope: string;
-  mode?: HandoffMode;
+  mode?: CustomerActionMode;
   url?: string | null;
   expires_in?: number;
 }
@@ -165,12 +164,12 @@ export interface PolicyClaims {
   iss: "foil";
   sub: string;
   version: number;
-  tier: Tier | "none";
+  scopes: string[];
   allow: PolicyAllow;
   constraints: Constraints;
   disclosures: DisclosureBundle | null;
-  evidence: Partial<Record<Tier, Evidence>>;
-  handoffs: HandoffConfig[];
+  evidence: Partial<Record<string, Evidence>>;
+  customer_actions: CustomerActionConfig[];
   max_age_s: number;
   disclose: { operator: boolean; agent: boolean };
   attestations: AttestationPolicy | null;
@@ -190,12 +189,12 @@ export interface PolicyObject extends ObjectBase {
   object: "policy";
   origin: string;
   version: number;
-  tier: Tier | "none";
+  scopes: string[];
   allow: PolicyAllow;
   constraints: Constraints;
   disclosures: DisclosureBundle | null;
-  evidence: Partial<Record<Tier, Evidence>>;
-  handoffs: HandoffConfig[];
+  evidence: Partial<Record<string, Evidence>>;
+  customer_actions: CustomerActionConfig[];
   max_age_s: number;
   disclose: { operator: boolean; agent: boolean };
   attestations: AttestationPolicy | null;
@@ -237,7 +236,7 @@ export interface TermsObject extends ObjectBase {
   scopes: { id: string; text: string }[];
   constraints: Constraints;
   max_age_s: number;
-  evidence: Partial<Record<Tier, Evidence>>;
+  evidence: Partial<Record<string, Evidence>>;
   disclosures: DisclosureBundle | null;
   expires_at: number;
 }
@@ -256,7 +255,7 @@ export interface ObservedEvidence {
   human: boolean;
   known_device: boolean;
   age_s: number;
-  handoffs?: string[];
+  customer_actions?: string[];
 }
 
 export interface DelegationRecord {
@@ -354,10 +353,10 @@ export type DowngradeReason =
   | "scope_violation"
   | "evidence_insufficient"
   | "agent_deactivated"
-  | "handoff_completed_by_agent";
+  | "customer_action_completed_by_agent";
 
 export interface Approval {
-  handoff: string;
+  customer_action: string;
   scope: string;
   context: Record<string, unknown>;
   approved_at: number;
@@ -373,7 +372,7 @@ export interface AgentBlock {
   scopes: string[];
   scopes_used: string[];
   constraints: Constraints;
-  delegation: {
+  authorization: {
     id: string;
     issuer: DelegationIssuer;
     policy_version: number;
@@ -385,7 +384,7 @@ export interface AgentBlock {
     attested: AttestedEvidence[];
     presented: PresentedEvidence | null;
   };
-  handoff: string | null;
+  customer_action: string | null;
   approvals: Approval[];
 }
 
@@ -396,7 +395,7 @@ export interface DowngradedBlock {
 }
 
 export type Plane = "human" | "agent" | "bot";
-export type SessionStatus = "active" | "requires_handoff" | "downgraded";
+export type SessionStatus = "active" | "requires_customer_action" | "downgraded";
 
 export interface SessionRecord extends ObjectBase {
   object: "session";
@@ -405,7 +404,7 @@ export interface SessionRecord extends ObjectBase {
   status: SessionStatus;
   decision: { verdict: "allow" | "block"; plane: Plane };
   agent: AgentBlock | DowngradedBlock | null;
-  next_action: { type: "handoff"; handoff: string } | null;
+  next_action: { type: "customer_action"; customer_action: string } | null;
   human?: boolean;
   known_device?: boolean;
   device?: string;
@@ -416,12 +415,13 @@ export interface SessionRecord extends ObjectBase {
   bound_at?: string;
 }
 
-export type HandoffStatus = "pending" | "completed" | "canceled" | "expired";
+export type CustomerActionStatus = "pending" | "completed" | "canceled" | "expired";
 
-export interface Handoff extends ObjectBase {
-  object: "handoff";
-  status: HandoffStatus;
-  mode: HandoffMode;
+export interface CustomerAction extends ObjectBase {
+  authorization?: string;
+  object: "customer_action";
+  status: CustomerActionStatus;
+  mode: CustomerActionMode;
   session: string;
   delegation: string;
   agent: string;

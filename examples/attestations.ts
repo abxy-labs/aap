@@ -9,7 +9,9 @@ import { generateKeyFile } from "../src/lib/keys.ts";
 import { Store, id } from "../src/lib/store.ts";
 import { Aap, credentialBody, issueCredential } from "../src/sdk/index.ts";
 import { startServer } from "../src/server/app.ts";
-import type { AgentBlock, DelegationObject } from "../src/types.ts";
+import type { AgentBlock, SessionRecord } from "../src/types.ts";
+
+import type { Authorization } from "../src/lib/authorization.ts";
 
 const dir = join(tmpdir(), `aap-attestations-${id("x")}`);
 const server = await startServer({ store: new Store(dir), port: 0 });
@@ -35,31 +37,23 @@ try {
   const site = client(siteAcct.keys.test);
   const agent = await operator.agents.create({ name: "balance-assistant", ceiling: { scopes: ["accounts:read"], constraints: {} } });
   await site.policies.create({
-    origin: "bank.example", tier: "read", disclosures: DEMO_BUNDLE, disclose: ["operator", "agent"],
-    evidence: { read: "attested" },
-    attestations: { issuers: [registered.issuer!.id, "operator"], types: ["EmailControlCredential"], claims: ["email_verified"], max_age_s: 30 * 86400 },
+    origin: "bank.example", scopes: ["accounts:read"], disclosures: DEMO_BUNDLE, disclose: ["operator", "agent"],
+    advanced: { evidence: { "accounts:read": "attested" },
+    attestations: { issuers: [registered.issuer!.id, "operator"], types: ["EmailControlCredential"], claims: ["email_verified"], max_age_s: 30 * 86400 } },
   });
-  show("policy accepts:", { issuers: ["identity.example", "the delegation's own operator"], types: ["EmailControlCredential"], required: ["email_verified"] });
+  show("policy accepts:", { issuers: ["identity.example", "the authorization's own operator"], types: ["EmailControlCredential"], required: ["email_verified"] });
 
-  const makeDelegation = async (subject: string, attestations?: string[]): Promise<DelegationObject> => {
-    const terms = await operator.terms.create({ agent: agent.id, origin: "bank.example", scopes: ["accounts:read"] });
-    return operator.delegations.create({
-      agent: agent.id, origin: "bank.example", subject, terms: terms.id, intent: "Check balances",
-      acceptance: { terms: terms.id, acknowledged: ["esign", "share"], viewed: ["esign", "privacy"], channel: "imessage", accepted_at: new Date().toISOString(), copies_sent_to: "email" },
-      ...(attestations ? { attestations } : {}),
-    });
+  const makeAuthorization = async (subject: string, attestations?: string[]): Promise<Authorization> => {
+    const a=await operator.authorizations.create({agent:agent.id,origin:"bank.example",subject,intent:"Check balances",scopes:["accounts:read"]});
+    return operator.authorizations.accept(a.id,{revision:a.consent.revision,acceptance:{acknowledged:["esign","share"],viewed:["esign","privacy"],channel:"in_app",accepted_at:new Date().toISOString(),copies_sent_to:"email"},attestations});
   };
-  const bind = async (d: DelegationObject, session: string) => {
-    const ch = await operator.test.challenges.create({ origin: "bank.example" });
-    const { grant } = await operator.grants.sign({ delegation: d, challenge: ch.jwt, sessionRef: "ref", intent: "Check balances" });
-    return operator.test.presentations.create({ origin: "bank.example", header: await operator.presentations.build({ grant, delegation: d }), asn: "AS14618", session });
-  };
+  const bind=(a:Authorization,session:string)=>operator.test.browser.connect({authorization:a.id,session,asn:"AS14618"}) as Promise<SessionRecord & {status_header?:string}>;
 
   step(3, "Without an attestation the session is refused");
-  const plain = await makeDelegation("usr_plain");
+  const plain = await makeAuthorization("usr_plain");
   show((await bind(plain, "sess_plain")).status_header ?? "", "");
 
-  step(4, "The provider posts its credential against the delegation");
+  step(4, "The provider posts its credential against the authorization");
   const subject = provider.credentials.subject(plain);
   show("subject the issuer names:", subject);
   const credential = await issueCredential(credentialBody({
@@ -71,21 +65,21 @@ try {
   show("attestation:", { id: attestation.id, issuer: attestation.issuer, type: attestation.type, claims: attestation.claims, submitted_by: attestation.submitted_by });
   show("the email address was discarded:", !JSON.stringify(attestation).includes("someone@example.com"));
 
-  step(5, "The session binds, and the site sees the attestation on the delegation");
+  step(5, "The session binds, and the site sees the attestation on the authorization");
   show((await bind(plain, "sess_ok")).status_header ?? "", "");
-  show("session:", ((await site.sessions.retrieve("sess_ok")).agent as AgentBlock).delegation.attested);
+  show("session:", ((await site.sessions.retrieve("sess_ok")).agent as AgentBlock).authorization.attested);
 
-  step(6, "An application that checked the email itself attaches its own credential when it creates the delegation");
-  // The subject is derived from the operator and its own id for the end user, both known before the delegation exists.
+  step(6, "An application that checked the email itself attaches its own credential when it accepts the authorization");
+  // The subject is derived from the operator and its own id for the end user, both known before authorization is accepted.
   const operatorId = (await operator.account.retrieve()).operator!.id;
   const own = await issueCredential(credentialBody({
     issuer: agent.id, type: "EmailControlCredential",
     subject: operator.credentials.subject({ operator: operatorId, subject: "usr_inline" }),
     claims: { email_verified: true }, validUntil: new Date(Date.now() + 30 * 86400_000),
   }), operator.keys.agents[agent.id]!);
-  const inline = await makeDelegation("usr_inline", [own]);
-  show("delegation created with the credential attached:", inline.id);
-  const attached = await operator.attestations.list({ delegation: inline.id });
+  const inline = await makeAuthorization("usr_inline", [own]);
+  show("authorization accepted with the credential attached:", inline.id);
+  const attached = await operator.attestations.list({ authorization: inline.id });
   show("recorded:", { issuer: attached.data[0]!.issuer, submitted_by: attached.data[0]!.submitted_by });
 
   step(7, "The site revokes it, and the session stops");

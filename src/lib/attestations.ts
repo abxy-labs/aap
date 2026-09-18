@@ -1,9 +1,8 @@
 import type { JWK } from "jose";
-import type { Attestation, AttestationPolicy, AttestedEvidence, PolicyClaims, StoredDelegation, Tier } from "../types.ts";
+import type { Attestation, AttestationPolicy, AttestedEvidence, PolicyClaims, StoredDelegation } from "../types.ts";
 import { SUBJECT_PREFIX, checkAgainstPolicy, retainedClaims, verifyCredential, type IssuerKey } from "./credentials.ts";
 import { invalid } from "./errors.ts";
 import { decode } from "./jwt.ts";
-import { tierOf } from "./scopes.ts";
 import { Store, id, now } from "./store.ts";
 import type { AgentClaims, OperatorClaims } from "../types.ts";
 
@@ -166,14 +165,9 @@ export async function satisfiesAttested(store: Store, delegation: string, policy
   return null;
 }
 
-/** The tiers in use that the site's policy requires attested evidence for. */
-export function attestedTiers(scopes: string[], policy: PolicyClaims): Tier[] {
-  const tiers = new Set<Tier>();
-  for (const s of scopes) {
-    const tier = tierOf(s);
-    if (tier && policy.evidence[tier] === "attested") tiers.add(tier);
-  }
-  return [...tiers];
+/** Scopes that require an accepted, current credential. */
+export function attestedScopes(scopes: string[], policy: PolicyClaims): string[] {
+  return scopes.filter(scope=>policy.evidence[scope]==="attested");
 }
 
 /** The operator's public key from its certificate, for policies that admit the delegation's own operator as an issuer. */

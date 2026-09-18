@@ -8,6 +8,7 @@ import { Aap, AapError, credentialBody, issueCredential } from "../src/sdk/index
 import { createApp, type App } from "../src/server/app.ts";
 import type { AgentBlock, AgentObject, DelegationObject } from "../src/types.ts";
 
+import type { Authorization } from "../src/lib/authorization.ts";
 const ORIGIN = "bank.example";
 const PROVIDER = "https://identity.example";
 
@@ -27,39 +28,35 @@ function clientFor(key: string | null): Aap {
 /** A site that requires an accepted attestation before read-tier scopes. */
 async function setPolicy(extra: Record<string, unknown> = {}) {
   return site.policies.create({
-    origin: ORIGIN, tier: "transact",
+    origin: ORIGIN, scopes: ["accounts:read", "transactions:read", "payments:initiate"],
     constraints: { currency: "usd", max_amount: 20000 },
     disclosures: DEMO_BUNDLE,
-    evidence: { read: "attested", transact: "attested" },
+    advanced: { evidence: { "accounts:read": "attested", "payments:initiate": "attested" },
     attestations: { issuers: [PROVIDER_ID, "operator"], types: ["EmailControlCredential"], claims: ["email_verified"] },
+    ...extra },
     disclose: ["operator", "agent"],
-    ...extra,
   });
 }
 
 let PROVIDER_ID = "";
 
 async function makeDelegation(scopes = ["accounts:read"], attestations?: string[]) {
-  const terms = await operator.terms.create({ agent: agent.id, origin: ORIGIN, scopes });
-  return operator.delegations.create({
-    agent: agent.id, origin: ORIGIN, subject: `usr_${id("s")}`, terms: terms.id, intent: "Check balances",
-    acceptance: { terms: terms.id, acknowledged: ["esign", "share"], viewed: ["esign", "privacy"], channel: "test", accepted_at: new Date().toISOString(), copies_sent_to: "email" },
-    ...(attestations ? { attestations } : {}),
-  });
+  const a=await operator.authorizations.create({agent:agent.id,origin:ORIGIN,subject:`usr_${id("s")}`,intent:"Check balances",scopes});
+  return accept(a,attestations);
+}
+function accept(a:Authorization,attestations?:string[]) {
+  return operator.authorizations.accept(a.id,{revision:a.consent.revision,acceptance:{acknowledged:["esign","share"],viewed:["esign","privacy"],channel:"test",accepted_at:new Date().toISOString(),copies_sent_to:"email"},attestations});
 }
 
-async function providerCredential(d: DelegationObject, claims: Record<string, string | number | boolean> = { email_verified: true, method: "email_link" }, validForS = 86400) {
+async function providerCredential(d: Authorization, claims: Record<string, string | number | boolean> = { email_verified: true, method: "email_link" }, validForS = 86400) {
   return issueCredential(credentialBody({
     issuer: PROVIDER, type: "EmailControlCredential", subject: operator.credentials.subject(d), claims,
     validUntil: new Date(Date.now() + validForS * 1000),
   }), providerKey);
 }
 
-async function bind(d: DelegationObject, sessionId?: string) {
-  const ch = await operator.test.challenges.create({ origin: ORIGIN });
-  const { grant } = await operator.grants.sign({ delegation: d, challenge: ch.jwt, sessionRef: "sess_ref", intent: "Check balances" });
-  const header = await operator.presentations.build({ grant, delegation: d });
-  return operator.test.presentations.create({ origin: ORIGIN, header, asn: "AS14618", session: sessionId });
+async function bind(d: Authorization, sessionId?: string) {
+  return operator.test.browser.connect({authorization:d.id,session:sessionId,asn:"AS14618"}) as Promise<import("../src/types.ts").SessionRecord & {status_header?:string}>;
 }
 
 beforeAll(async () => {
@@ -113,8 +110,8 @@ describe("a provider posts its own attestation", () => {
     const bound = await bind(d, "sess_ok");
     expect(bound.status_header).toBe("Foil-Agent-Status: bound");
     const block = (await site.sessions.retrieve("sess_ok")).agent as AgentBlock;
-    expect(block.delegation.attested[0]).toMatchObject({ attestation: a.id, issuer: PROVIDER, type: "EmailControlCredential", holder_bound: false });
-    expect((await site.delegations.retrieve(d.id, { expand: ["record"] }) as unknown as { record: { attested: unknown[] } }).record.attested).toHaveLength(1);
+    expect(block.authorization.attested[0]).toMatchObject({ attestation: a.id, issuer: PROVIDER, type: "EmailControlCredential", holder_bound: false });
+    expect((await site.attestations.list({authorization:d.id})).data).toHaveLength(1);
   });
 
   test("the site and the issuer can revoke; the operator cannot", async () => {
@@ -135,7 +132,7 @@ describe("an operator passes a credential through", () => {
   test("attached to the delegation it creates, signed by the agent's own key", async () => {
     const d0 = await makeDelegation();
     // The application verified the consumer's email itself and states it under its agent key.
-    const credential = await operator.credentials.issueForDelegation(d0, {
+    const credential = await operator.credentials.issueForAuthorization(d0, {
       issuer: PROVIDER, type: "EmailControlCredential", claims: { email_verified: true }, validUntil: new Date(Date.now() + 86_400_000),
     });
     // Signed by the agent key but naming the identity provider, so it is checked against that provider's
@@ -145,7 +142,7 @@ describe("an operator passes a credential through", () => {
 
     // Naming the agent itself works, because the site's policy admits "operator", which covers its agents.
     const d = await makeDelegation();
-    const own = await operator.credentials.issueForDelegation(d, {
+    const own = await operator.credentials.issueForAuthorization(d, {
       issuer: agent.id, type: "EmailControlCredential", claims: { email_verified: true }, validUntil: new Date(Date.now() + 86_400_000),
     });
     const a = await operator.attestations.create(d.id, { credential: own });
@@ -154,19 +151,15 @@ describe("an operator passes a credential through", () => {
   });
 
   test("attached inline when the delegation is created, and covered by the request signature", async () => {
-    const terms = await operator.terms.create({ agent: agent.id, origin: ORIGIN, scopes: ["accounts:read"] });
     const subject = `usr_${id("s")}`;
     const operatorId = (await operator.account.retrieve()).operator!.id;
     const credential = await issueCredential(credentialBody({
       issuer: PROVIDER, type: "EmailControlCredential", subject: `urn:aap:subject:${operatorId}:${subject}`,
       claims: { email_verified: true }, validUntil: new Date(Date.now() + 86_400_000),
     }), providerKey);
-    const d = await operator.delegations.create({
-      agent: agent.id, origin: ORIGIN, subject, terms: terms.id, intent: "Check balances",
-      acceptance: { terms: terms.id, acknowledged: ["esign", "share"], viewed: ["esign", "privacy"], channel: "test", accepted_at: new Date().toISOString(), copies_sent_to: "email" },
-      attestations: [credential],
-    });
-    const listed = await operator.attestations.list({ delegation: d.id });
+    const a=await operator.authorizations.create({agent:agent.id,origin:ORIGIN,subject,intent:"Check balances",scopes:["accounts:read"]});
+    const d=await accept(a,[credential]);
+    const listed = await operator.attestations.list({ authorization: d.id });
     expect(listed.data).toHaveLength(1);
     expect(listed.data[0]!.submitted_by).toBe("operator");
     expect((await bind(d, "sess_inline")).status_header).toBe("Foil-Agent-Status: bound");
@@ -234,7 +227,7 @@ describe("what is refused", () => {
 
   test("a site that accepts no attestations refuses submissions", async () => {
     const d = await makeDelegation();
-    await setPolicy({ attestations: null, evidence: { read: "asserted" } });
+    await setPolicy({ attestations: null, evidence: { "accounts:read": "asserted" } });
     expect((await provider.attestations.create(d.id, { credential: await providerCredential(d) }).then(() => null, (e) => e as AapError))!.code).toBe("attestations_not_accepted");
     // Without a required tier the same delegation binds with no attestation at all.
     expect((await bind(d, "sess_plain")).status_header).toBe("Foil-Agent-Status: bound");
@@ -243,7 +236,7 @@ describe("what is refused", () => {
 
   test("an expired delegation refuses new attestations", async () => {
     const d = await makeDelegation();
-    await site.delegations.revoke(d.id);
+    await site.authorizations.revoke(d.id);
     expect((await provider.attestations.create(d.id, { credential: await providerCredential(d) }).then(() => null, (e) => e as AapError))!.code).toBe("delegation_inactive");
   });
 });
@@ -308,7 +301,6 @@ describe("policy changes", () => {
 
 describe("inline attestations are all or nothing", () => {
   test("an invalid credential fails the request and writes no delegation", async () => {
-    const terms = await operator.terms.create({ agent: agent.id, origin: ORIGIN, scopes: ["accounts:read"] });
     const subject = `usr_${id("s")}`;
     const operatorId = (await operator.account.retrieve()).operator!.id;
     const good = await issueCredential(credentialBody({
@@ -320,16 +312,12 @@ describe("inline attestations are all or nothing", () => {
       claims: { email_verified: true }, validUntil: new Date(Date.now() + 86_400_000),
     }), await generateKeyFile());
 
-    const before = (await operator.delegations.list({ limit: 100 })).data.length;
+    const authorization=await operator.authorizations.create({agent:agent.id,origin:ORIGIN,subject,intent:"Check balances",scopes:["accounts:read"]});
+    const before = (await operator.authorizations.list({ status:"active", limit: 100 })).data.length;
     const attestationsBefore = (await operator.attestations.list({ limit: 100 })).data.length;
-    const err = await operator.delegations.create({
-      agent: agent.id, origin: ORIGIN, subject, terms: terms.id, intent: "Check balances",
-      acceptance: { terms: terms.id, acknowledged: ["esign", "share"], viewed: ["esign", "privacy"], channel: "test", accepted_at: new Date().toISOString(), copies_sent_to: "email" },
-      // The valid one is listed first, so a per-credential loop would have written it before failing.
-      attestations: [good, forged],
-    }).then(() => null, (e) => e as AapError);
+    const err=await accept(authorization,[good,forged]).then(()=>null,(e)=>e as AapError);
     expect(err!.code).toBe("credential_invalid");
-    expect((await operator.delegations.list({ limit: 100 })).data.length).toBe(before);
+    expect((await operator.authorizations.list({ status:"active", limit: 100 })).data.length).toBe(before);
     expect((await operator.attestations.list({ limit: 100 })).data.length).toBe(attestationsBefore);
   });
 });
@@ -369,12 +357,12 @@ describe("issuer identity cannot be claimed by URL", () => {
     expect((await site.attestations.retrieve(a.id)).status).toBe("active");
 
     // An operator-signed attestation belongs to no issuer account.
-    const own = await operator.credentials.issueForDelegation(await makeDelegation(), {
+    const own = await operator.credentials.issueForAuthorization(await makeDelegation(), {
       issuer: agent.id, type: "EmailControlCredential", claims: { email_verified: true }, validUntil: new Date(Date.now() + 86_400_000),
     });
     const d2 = await makeDelegation();
     const b = await operator.attestations.create(d2.id, {
-      credential: await operator.credentials.issueForDelegation(d2, {
+      credential: await operator.credentials.issueForAuthorization(d2, {
         issuer: agent.id, type: "EmailControlCredential", claims: { email_verified: true }, validUntil: new Date(Date.now() + 86_400_000),
       }),
     });

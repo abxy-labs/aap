@@ -12,13 +12,14 @@ function show(label: string, v: unknown) {
   console.log(`   ${label}${s.includes("\n") ? "\n" + s.replace(/^/gm, "   ") : " " + s}`);
 }
 
+// Illustrative document URLs/digests, not hosted legal documents.
 export const DEMO_BUNDLE = {
   bundle: "linking-v4",
   presentation: "app",
   gates: ["accounts:read", "transactions:read", "payments:initiate"],
   documents: [
-    { id: "esign", title: "Consent to electronic records", url: "https://cdn.usefoil.com/d/esign-v4.md", format: "text/markdown", sha256: "3f2a…", render: "full" },
-    { id: "privacy", title: "Privacy notice", url: "https://cdn.usefoil.com/d/privacy-v4.pdf", format: "application/pdf", sha256: "9c17…", render: "link" },
+    { id: "esign", title: "Consent to electronic records", url: "https://bank.example/legal/electronic-records-v4", format: "text/markdown", sha256: "3f2a6405a7e22b918490336674ebde5909f7b437b0ad14b5a5ff06e1f66a4b2d", render: "full" },
+    { id: "privacy", title: "Privacy notice", url: "https://bank.example/legal/privacy-v4.pdf", format: "application/pdf", sha256: "9c17aa0c5e048a11b00409c9af8ce5a20d66705e98605884d45d141bb0d13794", render: "link" },
   ],
   acknowledgements: [
     { id: "esign", text: "I agree to receive these documents electronically" },
@@ -51,71 +52,57 @@ export async function runDemo(opts: { store?: string; keep?: boolean } = {}): Pr
     const site = new Aap(siteAcct.keys.test, { apiBase: server.url });
     const policy = await site.policies.create({
       origin: "bank.example",
-      tier: "transact",
+      scopes: ["accounts:read", "transactions:read", "payments:initiate"],
       constraints: { currency: "usd", max_amount: 20000, max_count: 5 },
       disclosures: DEMO_BUNDLE,
-      evidence: { read: "asserted", transact: "observed" },
-      handoffs: [{ scope: "payments:initiate", mode: "approve", url: "https://bank.example/agent/confirm?aap_handoff={id}" }],
+      advanced: { evidence: { "payments:initiate": "observed" } },
+      customer_actions: [{ scope: "payments:initiate", mode: "approve", url: "https://bank.example/agent/confirm?aap_customer_action={id}" }],
       disclose: ["operator", "agent"],
     });
-    show("policy:", { id: policy.id, origin: policy.origin, version: policy.version, tier: policy.tier });
+    show("policy:", { id: policy.id, origin: policy.origin, version: policy.version, scopes: policy.scopes });
 
-    step(4, "The agent app fetches the terms the consumer must be shown");
-    const terms = await operator.terms.create({ agent: agent.id, origin: "bank.example", scopes: ["accounts:read", "payments:initiate"] });
-    show("terms:", { id: terms.id, scopes: terms.scopes, constraints: terms.constraints, acknowledgements: terms.disclosures?.acknowledgements });
-
-    step(5, "The consumer accepts in the app's own channel. The operator posts the delegation, signed with the agent key");
-    const live = await site.test.sessions.create({ origin: "bank.example", known_device: true, age: 240 });
-    const delegation = await operator.delegations.create({
-      agent: agent.id, origin: "bank.example", subject: "usr_41b", terms: terms.id, intent: "Pay monthly bills",
-      acceptance: { terms: terms.id, acknowledged: ["esign", "share"], viewed: ["esign", "privacy"], channel: "imessage", accepted_at: new Date().toISOString(), copies_sent_to: "email" },
-      site_session: live.id,
-      metadata: { task: "monthly-bills" },
+    step(4, "Request authorization and display its consent details to the customer");
+    const authorization = await operator.authorizations.create({
+      agent: agent.id, origin: "bank.example", subject: "customer_7Rk2mV8p",
+      intent: "Pay September electric bill", scopes: ["accounts:read", "payments:initiate"],
     });
-    show("delegation:", { id: delegation.id, status: delegation.status, scopes: delegation.scopes, constraints: delegation.constraints, expires_at: delegation.expires_at });
+    show("consent:", authorization.consent);
 
-    step(6, "The SDK's telemetry response carries a challenge; the agent signs a grant over it and the browser presents the chain");
-    const challenge = await operator.test.challenges.create({ origin: "bank.example" });
-    const { grant } = await operator.grants.sign({ delegation, challenge: challenge.jwt, sessionRef: "sess_19c2", intent: "Pay September electric bill" });
-    const header = await operator.presentations.build({ grant, delegation });
-    show("Foil-Agent-Grant:", header.slice(0, 40) + "… (" + header.length + " chars)");
+    step(5, "The customer accepts the exact revision shown in the app");
+    const live = await site.test.sessions.create({ origin: "bank.example", known_device: true, age: 240 });
+    await operator.authorizations.accept(authorization.id, {
+      revision: authorization.consent.revision,
+      acceptance: { acknowledged: ["esign", "share"], viewed: ["esign", "privacy"], channel: "in_app", accepted_at: new Date().toISOString(), copies_sent_to: "email" },
+      site_session: live.id,
+    });
 
-    step(7, "Foil verifies the chain and binds the grant to the session");
-    const session = await operator.test.presentations.create({ origin: "bank.example", header, asn: "AS14618" });
-    show(session.status_header ?? "", "");
-    show("session:", { id: session.id, status: session.status, plane: session.plane, scopes: (session.agent as { scopes: string[] }).scopes });
+    step(6, "Connect the browser; the SDK verifies the challenge and signs locally");
+    const session = await operator.test.browser.connect({ authorization: authorization.id, asn: "AS14618" });
+    show("session:", { id: session.id, status: session.status, plane: session.plane });
 
-    step(8, "The site reads the session on the verification call it already makes");
+    step(7, "The site reads the session on the verification call it already makes");
     show(`GET /v1/sessions/${session.id}:`, await site.sessions.retrieve(session.id));
 
-    step(9, "The agent prepares a payment and asks for a handoff before acting");
-    const handoff = await operator.handoffs.create({ session: session.id, scope: "payments:initiate", context: { amount: 14210, currency: "usd", payee: "Pacific Power", memo: "September electric" } });
-    show("handoff:", { id: handoff.id, status: handoff.status, mode: handoff.mode, url: handoff.url, code: handoff.code });
-    show("display.message:", handoff.display.message);
+    step(8, "The agent prepares a payment and requests a customer action before acting");
+    const customer_action = await operator.customerActions.create({ session: session.id, scope: "payments:initiate", context: { amount: 14210, currency: "usd", payee: "Pacific Power", memo: "September electric" } });
+    show("customer_action:", { id: customer_action.id, status: customer_action.status, mode: customer_action.mode, url: customer_action.url, code: customer_action.code });
+    show("display.message:", customer_action.display.message);
     show("session.next_action:", (await operator.sessions.retrieve(session.id)).next_action);
 
-    step(10, "The consumer opens the link on their own device and confirms; the site completes the handoff");
-    const waiting = operator.handoffs.wait(handoff.id, { timeout: 30, interval: 0.2 });
-    await site.test.handoffs.link(handoff.id);
-    const completed = await site.handoffs.complete(handoff.id, { result: { confirmed: true } });
-    show("handoff:", { status: completed.status, completed_by: completed.completed_by });
+    step(9, "The consumer opens the link on their own device and confirms; the site completes the customer action");
+    const waiting = operator.customerActions.wait(customer_action.id, { timeout: 30, interval: 0.2 });
+    await site.test.customerActions.link(customer_action.id);
+    const completed = await site.customerActions.complete(customer_action.id, { result: { confirmed: true } });
+    show("customer_action:", { status: completed.status, completed_by: completed.completed_by });
     const done = await waiting;
     show("operator's wait() returned:", { status: done.status });
     show("session.agent.approvals:", ((await site.sessions.retrieve(session.id)).agent as { approvals: unknown }).approvals);
 
-    step(11, "A second session presents the same grant and both are downgraded");
-    const replay = await operator.test.presentations.create({ origin: "bank.example", header, asn: "AS14618" });
-    show(replay.status_header ?? "", "");
-    show(`GET /v1/sessions/${session.id} now:`, (await site.sessions.retrieve(session.id)).decision);
+    step(10, "Revoke authorization; existing sessions can no longer exercise its scopes");
+    await site.authorizations.revoke(authorization.id);
+    show("revoked session:", await operator.test.sessions.use(session.id, { scope: "accounts:read" }));
 
-    step(12, "The site revokes the delegation; a fresh grant under it is refused");
-    await site.delegations.revoke(delegation.id);
-    const ch2 = await operator.test.challenges.create({ origin: "bank.example" });
-    const { grant: grant2 } = await operator.grants.sign({ delegation, challenge: ch2.jwt, sessionRef: "sess_20aa", intent: "Pay water bill" });
-    const after = await operator.test.presentations.create({ origin: "bank.example", header: grant2, asn: "AS14618" });
-    show(after.status_header ?? "", "");
-
-    step(13, "Events were recorded for every step");
+    step(11, "Events were recorded for every step");
     const events = await site.events.list({ limit: 20 });
     show("types:", events.data.map((e) => e.type).reverse());
   } finally {

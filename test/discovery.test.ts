@@ -65,22 +65,22 @@ describe("public discovery", () => {
     expect(aap.apiKey).toBe("sk_test_do_not_forward");
   });
 
-  test("discovery feeds the normal authenticated terms flow without enabling participation", async () => {
+  test("discovery feeds the normal authenticated authorization flow without enabling participation", async () => {
     const transport = (async (u, init) => app.fetch(new Request(u, init))) as typeof fetch;
     const found = await discover(origin, { fetch: transport });
     const anon = new Aap(null, { apiBase: found.api_base, fetch: transport });
-    await expect(anon.request("POST", "/v1/terms", {})).rejects.toMatchObject({ status: 401 });
+    await expect(anon.request("POST", "/v1/authorizations", {})).rejects.toMatchObject({ status: 401 });
     const op = await anon.accounts.create({ type: "operator", name: "Example operator" });
     const operator = new Aap(op.keys.test, { apiBase: found.api_base, fetch: transport, keys: anon.keys });
     const agent = await operator.agents.create({ name: "Assistant", ceiling: { scopes: ["accounts:read"], constraints: {} } });
     // Merely publishing discovery neither opts the site in nor changes policy.
-    await expect(operator.terms.create({ agent: agent.id, origin, scopes: ["accounts:read"] })).rejects.toMatchObject({ code: "origin_not_participating" });
+    await expect(operator.authorizations.create({subject:"user_41b",intent:"Read balances", agent: agent.id, origin, scopes: ["accounts:read"] })).rejects.toMatchObject({ code: "origin_not_participating" });
     const account = await anon.accounts.create({ type: "site", name: "Example bank" });
     const site = new Aap(account.keys.test, { apiBase: found.api_base, fetch: transport });
-    await site.policies.create({ origin, tier: "read" });
-    const terms = await operator.terms.create({ agent: agent.id, origin, scopes: ["accounts:read"] });
+    await site.policies.create({ origin, scopes: ["accounts:read"] });
+    const terms = await operator.authorizations.create({subject:"user_41b",intent:"Read balances", agent: agent.id, origin, scopes: ["accounts:read"] });
     expect(terms.origin).toBe(origin);
-    expect((await operator.delegations.list()).data).toHaveLength(0); // consent still required
+    expect((await operator.authorizations.list({status:"active"})).data).toHaveLength(0); // consent still required
   });
 
   test("ignores unknown top-level data and validates configured profiles before serving", async () => {
@@ -100,7 +100,7 @@ describe("public discovery", () => {
   });
 
   test("rejects malformed, mismatched, incompatible, and misleading profiles", async () => {
-    for (const bad of [null, [], {}, { ...profile, version: "future" }, { ...profile, api_version: "future" }, { ...profile, origin: "https://other.example" }, { ...profile, capabilities: ["anything"] }, { ...profile, capabilities: ["delegations", "handoffs", "handoffs"] }, { ...profile, jwks_uri: "https://evil.example/keys" }, { ...profile, endpoints: { ...profile.endpoints, terms: "https://evil.example/terms" } }, { ...profile, endpoints: { ...profile.endpoints, credential_verifications: `${apiBase}/v1/credential_verifications` } }]) {
+    for (const bad of [null, [], {}, { ...profile, version: "future" }, { ...profile, api_version: "future" }, { ...profile, origin: "https://other.example" }, { ...profile, capabilities: ["anything"] }, { ...profile, capabilities: ["delegations", "customer_actions", "customer_actions"] }, { ...profile, jwks_uri: "https://evil.example/keys" }, { ...profile, endpoints: { ...profile.endpoints, terms: "https://evil.example/terms" } }, { ...profile, endpoints: { ...profile.endpoints, credential_verifications: `${apiBase}/v1/credential_verifications` } }]) {
       await expect(discover(origin, { fetch: mock(bad) })).rejects.toThrow();
     }
   });

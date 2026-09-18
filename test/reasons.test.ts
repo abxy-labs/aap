@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { ORIGIN, makeDelegation, makePresentation, makeTerms, makeWorld, verifyAt } from "./world.ts";
 import { useScope } from "../src/lib/session.ts";
-import { completeHandoff, createHandoff } from "../src/lib/handoff.ts";
+import { completeCustomerAction, createCustomerAction } from "../src/lib/customer-action.ts";
 import { revokeDelegation, createDelegation } from "../src/lib/delegation.ts";
 import { setPolicy } from "../src/lib/policy.ts";
 import { generateKeyFile } from "../src/lib/keys.ts";
@@ -54,7 +54,7 @@ describe("downgrade reasons", () => {
   test("policy_denied: agent denied by name", async () => {
     const w = await makeWorld(); worlds.push(w);
     const dl = await makeDelegation(w);
-    await setPolicy(w.store, w.root, { origin: ORIGIN, tier: "transact", denyAgents: ["ag_test"], evidence: { transact: "observed" } });
+    await setPolicy(w.store, w.root, { origin: ORIGIN, scopes: ["accounts:read", "transactions:read", "payments:initiate"], denyAgents: ["ag_test"], evidence: { "payments:initiate": "observed" } });
     expect(reason(await verifyAt(w, await makePresentation(w, dl)))).toBe("policy_denied");
   });
 
@@ -100,13 +100,13 @@ describe("downgrade reasons", () => {
     expect((await verifyAt(w, await makePresentation(w, dl, { scopes: ["accounts:read"] }), "sess_read")).statusHeader).toBe("Foil-Agent-Status: bound");
   });
 
-  test("handoff_completed_by_agent: completing from the agent's own session downgrades it", async () => {
+  test("customer_action_completed_by_agent: completing from the agent's own session downgrades it", async () => {
     const w = await makeWorld(); worlds.push(w);
     const dl = await makeDelegation(w);
     await verifyAt(w, await makePresentation(w, dl));
-    const h = await createHandoff(w.store, w.root, { sessionId: "sess_agent", scope: "payments:initiate", context: { amount: 100, currency: "usd", payee: "x" } });
-    await expect(completeHandoff(w.store, h.id, { sessionId: "sess_agent" })).rejects.toThrow(/handoff_completed_by_agent|consumer's own session/);
-    expect(reason({ session: (await w.store.getSession("sess_agent"))! })).toBe("handoff_completed_by_agent");
+    const h = await createCustomerAction(w.store, w.root, { sessionId: "sess_agent", scope: "payments:initiate", context: { amount: 100, currency: "usd", payee: "x" } });
+    await expect(completeCustomerAction(w.store, h.id, { sessionId: "sess_agent" })).rejects.toThrow(/customer_action_completed_by_agent|consumer's own session/);
+    expect(reason({ session: (await w.store.getSession("sess_agent"))! })).toBe("customer_action_completed_by_agent");
   });
 });
 
@@ -137,10 +137,10 @@ describe("issuance rules", () => {
     await expect(createDelegation(w.store, w.root, { ...base, acceptance: { ...ok, copies_sent_to: undefined } })).rejects.toThrow(/retained copy/);
     await expect(createDelegation(w.store, w.root, { ...base, scopes: ["payments:initiate"], acceptance: ok })).rejects.toThrow(/not in the terms/);
     // policy changes after terms were created
-    await setPolicy(w.store, w.root, { origin: ORIGIN, tier: "read" });
+    await setPolicy(w.store, w.root, { origin: ORIGIN, scopes: ["accounts:read", "transactions:read"] });
     await expect(createDelegation(w.store, w.root, { ...base, acceptance: ok })).rejects.toThrow(/policy .* changed/);
     // site-only bundle
-    await setPolicy(w.store, w.root, { origin: ORIGIN, tier: "read", disclosures: { ...w.bundle, presentation: "site" } });
+    await setPolicy(w.store, w.root, { origin: ORIGIN, scopes: ["accounts:read", "transactions:read"], disclosures: { ...w.bundle, presentation: "site" } });
     const t2 = await makeTerms(w, ["accounts:read"]);
     await expect(createDelegation(w.store, w.root, { ...base, terms: t2.id, acceptance: { ...ok, terms: t2.id } })).rejects.toThrow(/completed on the site/);
   });

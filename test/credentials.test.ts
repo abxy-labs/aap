@@ -15,19 +15,19 @@ describe("reserved credential fields", () => {
     expect(dl.claims.record.presented).toBeNull();
     const r = await verifyAt(w, await makePresentation(w, dl));
     const block = r.session.agent as AgentBlock;
-    expect(block.delegation.issuer).toBe("foil");
-    expect(block.delegation.presented).toBeNull();
+    expect(block.authorization.issuer).toBe("foil");
+    expect(block.authorization.presented).toBeNull();
   });
 
   test("a policy carries no credential requirements by default and round-trips them when set", async () => {
     const w = await makeWorld(); worlds.push(w);
     expect((await loadPolicy(w.store, w.root, ORIGIN))!.credentials).toBeNull();
-    await setPolicy(w.store, w.root, { origin: ORIGIN, tier: "read", credentials: { types: ["mdl"], issuers: ["dmv.ca.gov"], claims: ["age_over_18"] } });
+    await setPolicy(w.store, w.root, { origin: ORIGIN, scopes: ["accounts:read", "transactions:read"], credentials: { types: ["mdl"], issuers: ["dmv.ca.gov"], claims: ["age_over_18"] } });
     expect((await loadPolicy(w.store, w.root, ORIGIN))!.credentials).toEqual({ types: ["mdl"], issuers: ["dmv.ca.gov"], claims: ["age_over_18"] });
   });
 
-  test("a tier that requires presented evidence is refused until a presentation exists", async () => {
-    const w = await makeWorld({ evidence: { read: "asserted", transact: "presented" } }); worlds.push(w);
+  test("a scope that requires presented evidence is refused until a presentation exists", async () => {
+    const w = await makeWorld({ evidence: { "accounts:read": "asserted", "payments:initiate": "presented" } }); worlds.push(w);
     const dl = await makeDelegation(w);
     expect((( await verifyAt(w, await makePresentation(w, dl))).session.agent as { reason?: string }).reason).toBe("evidence_insufficient");
     expect((await verifyAt(w, await makePresentation(w, dl, { scopes: ["accounts:read"] }), "sess_read")).statusHeader).toBe("Foil-Agent-Status: bound");

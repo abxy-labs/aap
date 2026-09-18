@@ -48,7 +48,7 @@ export function errorBody(e: ApiError, requestId: string): unknown {
 }
 
 const PREFIX_COLLECTIONS: Record<string, string> = {
-  ag: "agents", pol: "policies", trm: "terms", dl: "delegations", dr: "records", sess: "sessions", ho: "handoffs", evt: "events", we: "webhook_endpoints",
+  ag: "agents", pol: "policies", trm: "terms", dl: "delegations", dr: "records", sess: "sessions", ca: "customer_actions", auth: "authorizations", evt: "events", we: "webhook_endpoints",
 };
 
 /** Replace id-valued fields with the objects they name, for each dotted path requested. */
@@ -97,6 +97,12 @@ export function present<T>(obj: T): T {
   if (!obj || typeof obj !== "object") return obj;
   const o = { ...(obj as Record<string, unknown>) };
   delete o.claims;
+  if (o.object === "customer_action") delete o.delegation;
+  if (o.object === "authorization") {
+    delete o.terms;
+    delete o.delegation;
+    delete o.acceptance_hash;
+  }
   if (o.object === "webhook_endpoint") delete o.secret;
   if (o.object === "session") {
     delete o.operator_id;

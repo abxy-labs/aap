@@ -45,11 +45,11 @@ export async function makeWorld(policy: Partial<PolicyInput> = {}, keys: { alg?:
   await store.putAgent("ag_test", agentCert);
   await setPolicy(store, root, {
     origin: ORIGIN,
-    tier: "transact",
+    scopes: ["accounts:read", "transactions:read", "payments:initiate"],
     constraints: { currency: "usd", max_amount: 20000 },
     disclosures: DEMO_BUNDLE as DisclosureBundle,
-    evidence: { read: "asserted", transact: "observed" },
-    handoffs: [{ scope: "payments:initiate", mode: "approve", url: "https://bank.example/agent/confirm?aap_handoff={id}" }],
+    evidence: { "accounts:read": "asserted", "payments:initiate": "observed" },
+    customer_actions: [{ scope: "payments:initiate", mode: "approve", url: "https://bank.example/agent/confirm?aap_customer_action={id}" }],
     maxAgeS: 30 * 86400,
     disclose: { operator: true, agent: true },
     ...policy,

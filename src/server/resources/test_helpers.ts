@@ -1,8 +1,8 @@
-import type { AgentBlock, DowngradeReason, Handoff, SessionRecord } from "../../types.ts";
+import type { AgentBlock, DowngradeReason, CustomerAction, SessionRecord } from "../../types.ts";
 import { issueChallenge } from "../../lib/challenge.ts";
 import { invalid, notFound } from "../../lib/errors.ts";
 import { EVENT_TYPES, emitEvent, type EventType } from "../../lib/events.ts";
-import { buildDisplay, completeHandoff, linkHandoff } from "../../lib/handoff.ts";
+import { buildDisplay, completeCustomerAction, linkCustomerAction } from "../../lib/customer-action.ts";
 import { decode } from "../../lib/jwt.ts";
 import { useScope } from "../../lib/session.ts";
 import { id, iso, now } from "../../lib/store.ts";
@@ -11,13 +11,13 @@ import { ownsOrigin, requireTestMode } from "../auth.ts";
 import { present } from "../envelope.ts";
 import { bool, list, num, obj, str } from "../params.ts";
 import type { Ctx, Router } from "../router.ts";
-import { loadHandoff } from "./handoffs.ts";
+import { loadCustomerAction } from "./customer-actions.ts";
 import { loadSession } from "./sessions.ts";
 
 /** Fixed-outcome agents, the equivalent of test card numbers. Any presentation naming one produces that outcome. */
-export const TEST_AGENTS: Record<string, { outcome: "bound" | "requires_handoff" | DowngradeReason; description: string }> = {
+export const TEST_AGENTS: Record<string, { outcome: "bound" | "requires_customer_action" | DowngradeReason; description: string }> = {
   ag_test_bound: { outcome: "bound", description: "Binds on the agent plane with the requested scopes." },
-  ag_test_requires_handoff: { outcome: "requires_handoff", description: "Binds, then immediately requires a handoff on payments:initiate in approve mode." },
+  ag_test_requires_customer_action: { outcome: "requires_customer_action", description: "Binds, then immediately requires a customer_action on payments:initiate in approve mode." },
   ag_test_chain_invalid: { outcome: "chain_invalid", description: "Downgraded: a signature in the chain does not verify." },
   ag_test_challenge_invalid: { outcome: "challenge_invalid", description: "Downgraded: the grant was not signed over a challenge for this origin." },
   ag_test_revoked: { outcome: "delegation_revoked", description: "Downgraded: the delegation was revoked." },
@@ -25,7 +25,7 @@ export const TEST_AGENTS: Record<string, { outcome: "bound" | "requires_handoff"
   ag_test_policy_denied: { outcome: "policy_denied", description: "Downgraded: the site's policy does not admit this agent." },
   ag_test_replayed: { outcome: "grant_replayed", description: "Downgraded: the grant was presented by another session." },
   ag_test_operator_mismatch: { outcome: "operator_mismatch", description: "Downgraded: the session does not look like the operator's infrastructure." },
-  ag_test_evidence_insufficient: { outcome: "evidence_insufficient", description: "Downgraded: the tier requires observed evidence the delegation lacks." },
+  ag_test_evidence_insufficient: { outcome: "evidence_insufficient", description: "Downgraded: the scope requires observed evidence the delegation lacks." },
   ag_test_scope_violation: { outcome: "scope_violation", description: "Downgraded: the session exercised a scope outside its grant." },
 };
 
@@ -34,41 +34,64 @@ function fixtureBlock(agentId: string, scopes: string[]): AgentBlock {
   return {
     id: agentId, name: "test-agent", operator: "op_test", grant: id("gr"), intent: "Test presentation",
     scopes, scopes_used: [], constraints: { currency: "usd", max_amount: 20000, payees: "existing_only" },
-    delegation: {
+    authorization: {
       id: "dl_test", issuer: "foil", policy_version: 0, created_at: iso(t - 600), expires_at: iso(t + 30 * 86400), record: "dr_test",
       asserted: { terms: "trm_test", acknowledged: ["esign", "share"], channel: "test" }, observed: null, attested: [], presented: null,
     },
-    handoff: null, approvals: [],
+    customer_action: null, approvals: [],
   };
 }
 
-async function fixturePresentation(ctx: Ctx, agentId: string, origin: string, sessionId: string, scopes: string[]): Promise<{ session: SessionRecord; handoff?: Handoff }> {
+async function fixturePresentation(ctx: Ctx, agentId: string, origin: string, sessionId: string, scopes: string[]): Promise<{ session: SessionRecord; customer_action?: CustomerAction }> {
   const def = TEST_AGENTS[agentId]!;
   const nowD = new Date();
   const session = baseSession(ctx.store, sessionId, origin, nowD);
   session.operator_id = ctx.principal!.account.operator ?? "op_test";
-  if (def.outcome === "bound" || def.outcome === "requires_handoff") {
+  if (def.outcome === "bound" || def.outcome === "requires_customer_action") {
     const block = fixtureBlock(agentId, scopes);
-    Object.assign(session, { plane: "agent", status: "active", decision: { verdict: "allow", plane: "agent" }, agent: block, grant_jti: block.grant, delegation_id: "dl_test", bound_at: nowD.toISOString() });
+    // Fixed-outcome sandbox sessions still have isolated lifecycle state, so
+    // customer-action completion exercises the same active-authorization check.
+    const delegationId = id("dl"), authorizationId = id("auth"), t = now();
+    block.authorization.id = authorizationId;
+    const record = {
+      id: id("dr"), object: "delegation_record" as const,
+      asserted: { by: agentId, terms: "trm_test", acknowledged: [], viewed: [], channel: "test", accepted_at: nowD.toISOString() },
+      observed: null, attested: [], presented: null,
+    };
+    const claims = {
+      iss: "foil" as const, sub: delegationId, issuer: "foil" as const, agent: agentId,
+      operator: session.operator_id!, origin, subject: "customer_test", scopes,
+      constraints: {}, policy_version: 0, terms: "trm_test", intent: "Sandbox fixture",
+      record, iat: t, exp: t + 900, jti: id("jti"),
+    };
+    await ctx.store.putDelegation({
+      id: delegationId, object: "delegation", created: t, livemode: false,
+      metadata: { authorization: authorizationId }, status: "active", agent: agentId,
+      operator: claims.operator, origin, subject: claims.subject, scopes, constraints: {},
+      terms: claims.terms, issuer: "foil", intent: claims.intent, policy_version: 0,
+      expires_at: claims.exp, revoked_at: null, revoked_by: null, record: record.id,
+      certificate: "", claims,
+    });
+    Object.assign(session, { plane: "agent", status: "active", decision: { verdict: "allow", plane: "agent" }, agent: block, grant_jti: block.grant, delegation_id: delegationId, bound_at: nowD.toISOString() });
     await ctx.store.putSession(session);
-    if (def.outcome === "requires_handoff") {
-      const hoId = id("ho");
+    if (def.outcome === "requires_customer_action") {
+      const hoId = id("ca");
       const context = { amount: 14210, currency: "usd", payee: "Pacific Power", memo: "September electric" };
-      const h: Handoff = {
-        id: hoId, object: "handoff", created: now(), livemode: false, metadata: {}, status: "pending", mode: "approve",
-        session: session.id, delegation: "dl_test", agent: agentId, operator: session.operator_id!, origin, scope: "payments:initiate", context,
+      const h: CustomerAction = {
+        id: hoId, object: "customer_action", created: now(), livemode: false, metadata: {}, status: "pending", mode: "approve",
+        session: session.id, delegation: delegationId, authorization: authorizationId, agent: agentId, operator: session.operator_id!, origin, scope: "payments:initiate", context,
         display: buildDisplay({ scope: "payments:initiate", context, agentName: "test-agent", origin, mode: "approve" }),
         url: null, code: "TST-000", expires_at: now() + 900, completed_at: null, completed_by: null, result: null, linked_session: null, canceled_by: null,
       };
       if (!block.scopes.includes("payments:initiate")) block.scopes.push("payments:initiate");
-      block.handoff = hoId;
-      session.status = "requires_handoff";
-      session.next_action = { type: "handoff", handoff: hoId };
-      await ctx.store.putHandoff(h);
+      block.customer_action = hoId;
+      session.status = "requires_customer_action";
+      session.next_action = { type: "customer_action", customer_action: hoId };
+      await ctx.store.putCustomerAction(h);
       await ctx.store.putSession(session);
       await emitEvent(ctx.store, "session.bound", present(session), { id: ctx.requestId });
-      await emitEvent(ctx.store, "handoff.created", h, { id: ctx.requestId });
-      return { session, handoff: h };
+      await emitEvent(ctx.store, "customer_action.created", h, { id: ctx.requestId });
+      return { session, customer_action: h };
     }
     await emitEvent(ctx.store, "session.bound", present(session), { id: ctx.requestId });
     return { session };
@@ -88,23 +111,21 @@ function fixtureFor(type: EventType, origin: string): unknown {
   const t = now();
   const session = { ...present({ ...baseSession({ livemode: false } as never, id("sess"), origin, new Date()), plane: "agent", status: "active", decision: { verdict: "allow", plane: "agent" }, agent: fixtureBlock("ag_test_bound", ["accounts:read"]) }) };
   const context = { amount: 14210, currency: "usd", payee: "Pacific Power" };
-  const handoff: Handoff = {
-    id: id("ho"), object: "handoff", created: t, livemode: false, metadata: {}, status: "pending", mode: "approve", session: session.id, delegation: "dl_test", agent: "ag_test_bound", operator: "op_test",
+  const customer_action: CustomerAction = {
+    id: id("ca"), object: "customer_action", created: t, livemode: false, metadata: {}, status: "pending", mode: "approve", session: session.id, delegation: "dl_test", agent: "ag_test_bound", operator: "op_test",
     origin, scope: "payments:initiate", context, display: buildDisplay({ scope: "payments:initiate", context, agentName: "test-agent", origin, mode: "approve" }),
     url: null, code: "TST-000", expires_at: t + 900, completed_at: null, completed_by: null, result: null, linked_session: null, canceled_by: null,
   };
   const delegation = { id: id("dl"), object: "delegation", created: t, livemode: false, metadata: {}, status: "active", agent: "ag_test_bound", operator: "op_test", origin, subject: "usr_test", scopes: ["accounts:read"], constraints: {}, terms: "trm_test", issuer: "foil", intent: "test", policy_version: 1, expires_at: t + 30 * 86400, revoked_at: null, revoked_by: null, record: "dr_test", certificate: "" };
   switch (type) {
-    case "delegation.revoked": return { ...delegation, status: "revoked", revoked_at: t, revoked_by: "site" };
-    case "delegation.expired": return { ...delegation, status: "expired", expires_at: t - 1 };
-    case "delegation.created": return delegation;
+    case "authorization.revoked": return {id:id("auth"),object:"authorization",origin,operator:"op_test",created:t,livemode:false,status:"revoked"};
     case "session.bound": return session;
     case "session.scope_used": return { ...session, agent: { ...(session.agent as AgentBlock), scopes_used: ["accounts:read"] } };
     case "session.downgraded": return { ...session, plane: "bot", status: "downgraded", decision: { verdict: "block", plane: "bot" }, agent: { grant: id("gr"), reason: "grant_replayed" } };
-    case "handoff.created": return handoff;
-    case "handoff.completed": return { ...handoff, status: "completed", completed_at: t, completed_by: { session: id("sess"), human: true, known_device: true, device: "mobile", cloud_environment: false } };
-    case "handoff.canceled": return { ...handoff, status: "canceled", canceled_by: "operator" };
-    case "handoff.expired": return { ...handoff, status: "expired", expires_at: t - 1 };
+    case "customer_action.created": return customer_action;
+    case "customer_action.completed": return { ...customer_action, status: "completed", completed_at: t, completed_by: { session: id("sess"), human: true, known_device: true, device: "mobile", cloud_environment: false } };
+    case "customer_action.canceled": return { ...customer_action, status: "canceled", canceled_by: "operator" };
+    case "customer_action.expired": return { ...customer_action, status: "expired", expires_at: t - 1 };
     default: return { id: id("obj"), object: type.split(".")[0], created: t, livemode: false };
   }
 }
@@ -138,8 +159,8 @@ export function testHelperRoutes(r: Router): void {
     const agent = str(ctx.body, "agent");
     if (agent) {
       if (!TEST_AGENTS[agent]) throw invalid("parameter_invalid", `Unknown test agent '${agent}'. List them with GET /v1/test_helpers/agents.`, "agent");
-      const { session, handoff } = await fixturePresentation(ctx, agent, origin, sessionId, list(ctx.body, "scopes") ?? ["accounts:read"]);
-      return { ...present(session), ...(handoff ? { handoff } : {}) };
+      const { session, customer_action } = await fixturePresentation(ctx, agent, origin, sessionId, list(ctx.body, "scopes") ?? ["accounts:read"]);
+      return { ...present(session), ...(customer_action ? { customer_action: present(customer_action) } : {}) };
     }
     const header = (str(ctx.body, "header", true)!).replace(/^Foil-Agent-Grant:\s*/i, "");
     const result = await verifyPresentation(ctx.store, ctx.root, { header, origin, sessionId, asn: str(ctx.body, "asn"), ja4: str(ctx.body, "ja4") });
@@ -148,7 +169,7 @@ export function testHelperRoutes(r: Router): void {
       throw invalid("presentation_not_yours", "The chain in this presentation belongs to another operator.", "header");
     }
     await emitEvent(ctx.store, result.session.plane === "agent" ? "session.bound" : "session.downgraded", present(result.session), { id: ctx.requestId });
-    return { ...present(result.session), status_header: result.statusHeader, ...(result.narrowed ? { narrowed: result.narrowed } : {}), ...(result.handoffs ? { handoff_scopes: result.handoffs.map((h) => h.scope) } : {}) };
+    return { ...present(result.session), status_header: result.statusHeader, ...(result.narrowed ? { narrowed: result.narrowed } : {}), ...(result.customer_actions ? { customer_action_scopes: result.customer_actions.map((h) => h.scope) } : {}) };
   });
 
   r.add("POST", "/v1/test_helpers/sessions/:id/use", async (ctx) => {
@@ -156,30 +177,30 @@ export function testHelperRoutes(r: Router): void {
     await loadSession(ctx, ctx.params.id!);
     const scope = str(ctx.body, "scope", true)!;
     const r2 = await useScope(ctx.store, ctx.root, ctx.params.id!, scope);
-    if (r2.handoff) await emitEvent(ctx.store, "handoff.created", r2.handoff, { id: ctx.requestId });
+    if (r2.customer_action) await emitEvent(ctx.store, "customer_action.created", r2.customer_action, { id: ctx.requestId });
     else if (r2.session.plane === "agent") await emitEvent(ctx.store, "session.scope_used", present(r2.session), { id: ctx.requestId });
     else await emitEvent(ctx.store, "session.downgraded", present(r2.session), { id: ctx.requestId });
-    return { ...present(r2.session), ...(r2.handoff ? { handoff: r2.handoff } : {}), status_header: r2.statusHeader ?? r2.handoffHeader };
+    return { ...present(r2.session), ...(r2.customer_action ? { customer_action: present(r2.customer_action) } : {}), status_header: r2.statusHeader ?? r2.customer_actionHeader };
   });
 
-  r.add("POST", "/v1/test_helpers/handoffs/:id/link", async (ctx) => {
+  r.add("POST", "/v1/test_helpers/customer_actions/:id/link", async (ctx) => {
     requireTestMode(ctx.principal!);
-    const h = await loadHandoff(ctx, ctx.params.id!);
+    const h = await loadCustomerAction(ctx, ctx.params.id!);
     const sessionId = str(ctx.body, "session") ?? (await consumerSession(ctx, { origin: h.origin, known_device: bool(ctx.body, "known_device") ?? true })).id;
-    return linkHandoff(ctx.store, h.id, sessionId);
+    return present(await linkCustomerAction(ctx.store, h.id, sessionId));
   });
 
-  r.add("POST", "/v1/test_helpers/handoffs/:id/complete", async (ctx) => {
+  r.add("POST", "/v1/test_helpers/customer_actions/:id/complete", async (ctx) => {
     requireTestMode(ctx.principal!);
-    const h = await loadHandoff(ctx, ctx.params.id!);
+    const h = await loadCustomerAction(ctx, ctx.params.id!);
     const sessionId = str(ctx.body, "session") ?? (h.linked_session ?? (await consumerSession(ctx, { origin: h.origin, known_device: bool(ctx.body, "known_device") ?? true })).id);
     const cs = await ctx.store.getSession(sessionId);
     if (!cs) throw notFound("session", sessionId);
     const outcome = str(ctx.body, "outcome");
     const result = obj(ctx.body, "result") ?? (outcome ? { outcome } : null);
-    const done = await completeHandoff(ctx.store, h.id, { sessionId, result });
-    await emitEvent(ctx.store, "handoff.completed", done, { id: ctx.requestId });
-    return done;
+    const done = await completeCustomerAction(ctx.store, h.id, { sessionId, result });
+    await emitEvent(ctx.store, "customer_action.completed", done, { id: ctx.requestId });
+    return present(done);
   });
 
   r.add("POST", "/v1/test_helpers/events", async (ctx) => {
