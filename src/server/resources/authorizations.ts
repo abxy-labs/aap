@@ -211,7 +211,14 @@ export function authorizationRoutes(r: Router) {
           "Acceptance must reference the exact displayed consent revision.",
           "revision",
         );
-      const { agent } = await ownAgentClaims(ctx, a.agent);
+      // A matching replay only reads the already-issued result. Its original
+      // registered signing key remains authoritative after deactivation/expiry;
+      // fresh issuance still requires a currently valid agent certificate.
+      const agent = a.status === "active"
+        ? await ctx.store.getAgentObject(a.agent)
+        : (await ownAgentClaims(ctx, a.agent)).agent;
+      if (!agent || agent.operator !== a.operator)
+        throw notFound("agent", a.agent);
       const payload = authorizationSigningPayload(a.id, p),
         hash = sha(payload);
       await verifyRequestSignature(

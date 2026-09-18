@@ -6,6 +6,8 @@ import { Store } from "../src/lib/store.ts";
 import { createApp } from "../src/server/app.ts";
 import { Aap } from "../src/sdk/index.ts";
 import type { Authorization } from "../src/lib/authorization.ts";
+import { generateKeyFile } from "../src/lib/keys.ts";
+import { issueAgent } from "../src/lib/certs.ts";
 
 let store: Store, site: Aap, operator: Aap, stranger: Aap, agent: string;
 beforeEach(async () => {
@@ -166,6 +168,31 @@ test("a changed policy requires fresh customer consent", async () => {
     operator.authorizations.accept(a.id, acceptance(a)),
   ).rejects.toMatchObject({ code: "terms_stale" });
   expect(await store.listDelegations()).toHaveLength(0);
+});
+test.each(["deactivated", "expired"])("acceptance replay survives an %s agent but cannot issue new access", async state => {
+  const a = await request(), pending = await request(), p = acceptance(a);
+  await operator.authorizations.accept(a.id, p);
+  if (state === "deactivated") await operator.agents.deactivate(agent);
+  else {
+    const saved = (await store.getAgentObject(agent))!;
+    saved.certificate = await issueAgent(operator.keys.operator!, saved.operator, {
+      id: saved.id, name: saved.name, key: saved.public_key, ceiling: saved.ceiling,
+      now: new Date(Date.now() - 2 * 86400_000), days: 1,
+    });
+    saved.expires_at = Math.floor(Date.now() / 1000) - 86400;
+    await store.putAgentObject(saved);
+  }
+  expect((await operator.authorizations.accept(a.id, p)).status).toBe("active");
+  await expect(operator.authorizations.accept(pending.id, acceptance(pending))).rejects.toBeDefined();
+  await expect(operator.authorizations.accept(a.id, { ...p, acceptance: { ...p.acceptance, channel: "changed" } }))
+    .rejects.toMatchObject({ code: "authorization_already_accepted" });
+  const original = operator.keys.agents[agent]!;
+  operator.keys.agents[agent] = await generateKeyFile();
+  await expect(operator.authorizations.accept(a.id, p)).rejects.toMatchObject({ code: "invalid_signature" });
+  operator.keys.agents[agent] = original;
+  expect(await store.listDelegations()).toHaveLength(1);
+  await site.authorizations.revoke(a.id);
+  await expect(operator.authorizations.accept(a.id, p)).rejects.toBeDefined();
 });
 test("another operator cannot read, accept, revoke, or connect an authorization", async () => {
   const a = await request();

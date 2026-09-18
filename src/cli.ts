@@ -372,7 +372,7 @@ async function main(argv: string[]): Promise<number> {
       if (sub === "subject") {
         const { aap } = await client(flags);
         const d = await aap.authorizations.retrieve(str(flags, "authorization", true)!);
-        out({ object: "credential_subject", subject: delegationSubject(d), delegation: d.id });
+        out({ object: "credential_subject", subject: delegationSubject(d), authorization: d.id });
         return 0;
       }
       if (sub !== "issue") throw new UsageError("usage: aap credentials issue --issuer URL --type T --subject URI --claims k=v --valid-for 30d --key FILE [--out FILE] | aap credentials subject --authorization ID");
