@@ -9,7 +9,7 @@ const ARRAY_KEYS = new Set([
 
 /** Leaf keys that look numeric but are strings. */
 const STRING_KEYS = new Set([
-  "subject", "id", "origin", "session", "agent", "delegation", "terms", "handoff", "name", "description", "url", "code", "ref",
+  "subject", "id", "origin", "session", "agent", "authorization", "revision", "customer_action", "name", "description", "url", "code", "ref",
   "application", "memo", "payee", "intent", "channel", "accepted_at", "copies_sent_to", "vetting", "session_handling", "type", "status",
   "starting_after", "ending_before", "from", "to", "outcome", "provider", "reference", "currency", "bundle", "title", "format", "sha256", "text",
 ]);

@@ -29,14 +29,13 @@ Getting started
   demo [--keep]                                        Run the whole lifecycle against an in-process API
 
 Resources (create, retrieve, list, and the verbs shown)
-  attestations    create --delegation ID --credential FILE|JWT  |  retrieve ID | list [--delegation ID] | revoke ID
+  attestations    create --authorization ID --credential FILE|JWT  |  retrieve ID | list [--authorization ID] | revoke ID
   issuers         retrieve ID | list
   agents          create --name N --scopes a,b [--max-amount N] [--currency usd] [--payees existing_only]  |  retrieve ID | list | update ID | deactivate ID
-  policies        create --origin O --tier T [--handoff scope=..,mode=..,url=..] [--disclosures @file.json] ...  |  retrieve ID | list [--origin O]
-  terms           create --agent ID --origin O --scopes a,b  |  retrieve ID
-  delegations     create --agent ID --origin O --subject S --terms ID --acceptance @file.json [--site-session ID]  |  retrieve ID | list | revoke ID
+  policies        create --origin O --scopes a,b [--customer-action scope=..,mode=..,url=..] [--disclosures @file.json] | retrieve ID | list
+  authorizations  create --agent ID --origin O --subject S --intent TEXT --scopes a,b | accept ID --revision HASH --data '{"acceptance":{...}}' | retrieve ID | list | revoke ID
   sessions        retrieve ID | list [--origin O] [--status S]
-  handoffs        create --session ID --scope S [--context.amount N ...]  |  retrieve ID | list | update ID | complete ID | cancel ID | wait ID [--timeout 15m]
+  customer-actions create --session ID --scope S [--context.amount N ...]  |  retrieve ID | list | update ID | complete ID | cancel ID | wait ID [--timeout 15m]
   events          retrieve ID | list [--type T]
   webhook-endpoints  create --url U [--enabled-events a,b] | retrieve ID | list | update ID | delete ID
   directory       list
@@ -45,20 +44,17 @@ Resources (create, retrieve, list, and the verbs shown)
 
 Local signing (nothing is sent to the API except reads)
   credentials issue --issuer URL --type T --subject URI --claims k=v,k=v --valid-for 30d --key FILE [--out FILE]
-  credentials subject --delegation ID                           The subject an issuer names for a delegation
-  grants sign --delegation ID --challenge JWT|FILE --session-ref REF [--intent T] [--scopes a,b] [--out FILE]
-  present --grant FILE|JWT --delegation ID [--out FILE]        Build the Foil-Agent-Grant header value
-  challenges verify JWT|FILE                                    Check a challenge against the root key
-  verify-chain --delegation ID|FILE                             Verify a delegation certificate offline
+  credentials subject --authorization ID                           The subject an issuer names for an authorization
   keys generate --out FILE [--alg ES256|EdDSA]
 
 Test mode helpers
+  test browser connect --authorization ID [--asn AS14618]
   test agents list
   test sessions create --origin O [--known-device] [--age 240]      A consumer session Foil observed
   test challenges create --origin O
   test presentations create --origin O (--header-file F | --agent ag_test_bound) [--session ID] [--asn A]
   test sessions use ID --scope S
-  test handoffs link ID | complete ID [--outcome passed]
+  test customer-actions link ID | complete ID [--outcome passed]
   listen --forward-to localhost:3000/webhooks [--events a,b]
   trigger EVENT_TYPE [--origin O]
   logs tail
@@ -111,7 +107,7 @@ function constraintsFrom(flags: Flags): Record<string, unknown> {
 
 const CONSTRAINT_FLAGS = ["currency", "max-amount", "max-total", "max-count", "payees"];
 
-function parseHandoffShorthand(v: string): Record<string, unknown> {
+function parseCustomerActionShorthand(v: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const part of v.split(",")) {
     const eq = part.indexOf("=");
@@ -120,7 +116,7 @@ function parseHandoffShorthand(v: string): Record<string, unknown> {
     const val = part.slice(eq + 1).trim();
     out[k] = k === "expires_in" ? Number(val) : val;
   }
-  if (!out.scope) throw new UsageError(`--handoff needs scope=...: got '${v}'`);
+  if (!out.scope) throw new UsageError(`--customer_action needs scope=...: got '${v}'`);
   return out;
 }
 
@@ -137,7 +133,7 @@ async function resourceCommand(resource: string, verb: string | undefined, rest:
     case "attestations": {
       if (verb === "create") {
         const credential = await readJwtOrFile(str(flags, "credential", true)!);
-        out(await aap.attestations.create(str(flags, "delegation", true)!, { credential }, ro));
+        out(await aap.attestations.create(str(flags, "authorization", true)!, { credential }, ro));
         return 0;
       }
       if (verb === "retrieve") { out(await aap.attestations.retrieve(needId())); return 0; }
@@ -179,16 +175,16 @@ async function resourceCommand(resource: string, verb: string | undefined, rest:
     }
     case "policies": {
       if (verb === "create") {
-        const p = paramsFromFlags(flags, ["id", "handoff", "allow-operators", "allow-agents", "deny-agents", "max-age-days", "evidence", ...CONSTRAINT_FLAGS]);
-        const handoffs = all(flags, "handoff").map(parseHandoffShorthand);
-        if (handoffs.length) p.handoffs = [...((p.handoffs as unknown[]) ?? []), ...handoffs];
+        const p = paramsFromFlags(flags, ["id", "customer-action", "allow-operators", "allow-agents", "deny-agents", "max-age-days", "evidence", ...CONSTRAINT_FLAGS]);
+        const customer_actions = all(flags, "customer-action").map(parseCustomerActionShorthand);
+        if (customer_actions.length) p.customer_actions = [...((p.customer_actions as unknown[]) ?? []), ...customer_actions];
         const allow: Record<string, unknown> = { ...((p.allow as Record<string, unknown>) ?? {}) };
         const ao = str(flags, "allow-operators"); if (ao) allow.operators = ao === "any" ? "any" : ao.split(",");
         const aa = str(flags, "allow-agents"); if (aa) allow.agents = aa === "any" ? "any" : aa.split(",");
         const da = list(flags, "deny-agents"); if (da) allow.deny_agents = da;
         if (Object.keys(allow).length) p.allow = allow;
         const ev = str(flags, "evidence");
-        if (ev) p.evidence = Object.fromEntries(ev.split(",").map((pair) => { const [t, e] = pair.split("="); if (!t || !e) throw new UsageError("--evidence looks like read=asserted,transact=observed"); return [t.trim(), e.trim()]; }));
+        if (ev) p.advanced = { ...((p.advanced as Record<string,unknown>) ?? {}), evidence: Object.fromEntries(ev.split(",").map((pair) => { const [t, e] = pair.split("="); if (!t || !e) throw new UsageError("--evidence looks like accounts:read=asserted,payments:initiate=observed"); return [t.trim(), e.trim()]; })) };
         const days = num(flags, "max-age-days"); if (days !== undefined) p.max_age_s = days * 86400;
         const c = constraintsFrom(flags); if (Object.keys(c).length) p.constraints = { ...((p.constraints as Record<string, unknown>) ?? {}), ...c };
         out(await aap.policies.create(p, ro));
@@ -198,25 +194,12 @@ async function resourceCommand(resource: string, verb: string | undefined, rest:
       if (verb === "list") { out(await aap.policies.list(params())); return 0; }
       break;
     }
-    case "terms": {
-      if (verb === "create") { out(await aap.terms.create(params() as never, ro)); return 0; }
-      if (verb === "retrieve") { out(await aap.terms.retrieve(needId())); return 0; }
-      break;
-    }
-    case "delegations": {
-      if (verb === "create") {
-        const p = paramsFromFlags(flags, ["id", "acceptance"]);
-        const acc = str(flags, "acceptance");
-        if (acc) p.acceptance = acc.startsWith("@") ? JSON.parse(await readText(acc.slice(1))) : JSON.parse(await readText(acc));
-        if (!p.acceptance) throw new UsageError("--acceptance @file.json or --acceptance.acknowledged ... is required");
-        if (p.site_session === undefined && str(flags, "site-session")) p.site_session = str(flags, "site-session");
-        if (typeof p.acceptance === "object" && p.acceptance && !(p.acceptance as { terms?: string }).terms && p.terms) (p.acceptance as { terms?: string }).terms = String(p.terms);
-        out(await aap.delegations.create(p as never, ro));
-        return 0;
-      }
-      if (verb === "retrieve") { out(await aap.delegations.retrieve(needId(), ro)); return 0; }
-      if (verb === "list") { out(await aap.delegations.list(params(), ro)); return 0; }
-      if (verb === "revoke") { out(await aap.delegations.revoke(needId(), params())); return 0; }
+    case "authorizations": {
+      if (verb === "create") { out(await aap.authorizations.create(params() as never, ro)); return 0; }
+      if (verb === "accept") { out(await aap.authorizations.accept(needId(), params() as never, ro)); return 0; }
+      if (verb === "retrieve") { out(await aap.authorizations.retrieve(needId())); return 0; }
+      if (verb === "list") { out(await aap.authorizations.list(params())); return 0; }
+      if (verb === "revoke") { out(await aap.authorizations.revoke(needId(), params())); return 0; }
       break;
     }
     case "sessions": {
@@ -224,15 +207,15 @@ async function resourceCommand(resource: string, verb: string | undefined, rest:
       if (verb === "list") { out(await aap.sessions.list(params(), ro)); return 0; }
       break;
     }
-    case "handoffs": {
-      if (verb === "create") { out(await aap.handoffs.create(params() as never, ro)); return 0; }
-      if (verb === "retrieve") { out(await aap.handoffs.retrieve(needId(), ro)); return 0; }
-      if (verb === "list") { out(await aap.handoffs.list(params(), ro)); return 0; }
-      if (verb === "update") { out(await aap.handoffs.update(needId(), params())); return 0; }
-      if (verb === "complete") { out(await aap.handoffs.complete(needId(), params() as never)); return 0; }
-      if (verb === "cancel") { out(await aap.handoffs.cancel(needId())); return 0; }
+    case "customer-actions": {
+      if (verb === "create") { out(await aap.customerActions.create(params() as never, ro)); return 0; }
+      if (verb === "retrieve") { out(await aap.customerActions.retrieve(needId(), ro)); return 0; }
+      if (verb === "list") { out(await aap.customerActions.list(params(), ro)); return 0; }
+      if (verb === "update") { out(await aap.customerActions.update(needId(), params())); return 0; }
+      if (verb === "complete") { out(await aap.customerActions.complete(needId(), params() as never)); return 0; }
+      if (verb === "cancel") { out(await aap.customerActions.cancel(needId())); return 0; }
       if (verb === "wait") {
-        const h = await aap.handoffs.wait(needId(), { timeout: parseDuration(str(flags, "timeout"), 900), interval: parseDuration(str(flags, "interval"), 1) });
+        const h = await aap.customerActions.wait(needId(), { timeout: parseDuration(str(flags, "timeout"), 900), interval: parseDuration(str(flags, "interval"), 1) });
         out(h);
         return h.status === "completed" ? 0 : 2;
       }
@@ -261,6 +244,7 @@ async function resourceCommand(resource: string, verb: string | undefined, rest:
       const v2 = rest[0];
       const id2 = rest[1] ?? str(flags, "id");
       const p = paramsFromFlags(flags, ["id", "header-file"]);
+      if (sub === "browser" && v2 === "connect") { out(await aap.test.browser.connect(p as never)); return 0; }
       if (sub === "agents") { out(await aap.test.agents.list()); return 0; }
       if (sub === "sessions" && v2 === "create") { out(await aap.test.sessions.create(p as never)); return 0; }
       if (sub === "sessions" && v2 === "use") { if (!id2) throw new UsageError("test sessions use needs an id"); out(await aap.test.sessions.use(id2, p as never)); return 0; }
@@ -272,9 +256,9 @@ async function resourceCommand(resource: string, verb: string | undefined, rest:
         out(s);
         return s.plane === "agent" ? 0 : 2;
       }
-      if (sub === "handoffs" && v2 === "link") { if (!id2) throw new UsageError("test handoffs link needs an id"); out(await aap.test.handoffs.link(id2, p as never)); return 0; }
-      if (sub === "handoffs" && v2 === "complete") { if (!id2) throw new UsageError("test handoffs complete needs an id"); out(await aap.test.handoffs.complete(id2, p as never)); return 0; }
-      throw new UsageError("usage: aap test agents list | sessions create|use | challenges create | presentations create | handoffs link|complete");
+      if (sub === "customer-actions" && v2 === "link") { if (!id2) throw new UsageError("test customer-actions link needs an id"); out(await aap.test.customerActions.link(id2, p as never)); return 0; }
+      if (sub === "customer-actions" && v2 === "complete") { if (!id2) throw new UsageError("test customer-actions complete needs an id"); out(await aap.test.customerActions.complete(id2, p as never)); return 0; }
+      throw new UsageError("usage: aap test agents list | sessions create|use | challenges create | presentations create | customer_actions link|complete");
     }
     default:
       void profile;
@@ -387,11 +371,11 @@ async function main(argv: string[]): Promise<number> {
     case "credentials": {
       if (sub === "subject") {
         const { aap } = await client(flags);
-        const d = await aap.delegations.retrieve(str(flags, "delegation", true)!);
+        const d = await aap.authorizations.retrieve(str(flags, "authorization", true)!);
         out({ object: "credential_subject", subject: delegationSubject(d), delegation: d.id });
         return 0;
       }
-      if (sub !== "issue") throw new UsageError("usage: aap credentials issue --issuer URL --type T --subject URI --claims k=v --valid-for 30d --key FILE [--out FILE] | aap credentials subject --delegation ID");
+      if (sub !== "issue") throw new UsageError("usage: aap credentials issue --issuer URL --type T --subject URI --claims k=v --valid-for 30d --key FILE [--out FILE] | aap credentials subject --authorization ID");
       const key = await readKeyFile(str(flags, "key", true)!);
       const claims: Record<string, string | number | boolean> = {};
       for (const pair of list(flags, "claims") ?? []) {
@@ -403,10 +387,10 @@ async function main(argv: string[]): Promise<number> {
       }
       let subject = str(flags, "subject");
       if (!subject) {
-        const delegation = str(flags, "delegation");
-        if (!delegation) throw new UsageError("--subject or --delegation is required");
+        const delegation = str(flags, "authorization");
+        if (!delegation) throw new UsageError("--subject or --authorization is required");
         // An issuer account cannot read a delegation, so a provider is given the subject rather than deriving it.
-        const d = await (await client(flags)).aap.delegations.retrieve(delegation).catch((e: unknown) => {
+        const d = await (await client(flags)).aap.authorizations.retrieve(delegation).catch((e: unknown) => {
           throw e instanceof AapError && e.code === "resource_missing"
             ? new UsageError(`cannot read ${delegation} with this account, so the subject cannot be derived. Pass --subject, which whoever asked for the check gives you.`)
             : e;
@@ -446,48 +430,6 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       }
       throw new UsageError("usage: aap keys generate --out FILE [--alg ES256|EdDSA] | aap keys list");
-    }
-    case "grants": {
-      if (sub !== "sign") throw new UsageError("usage: aap grants sign --delegation ID --challenge JWT|FILE --session-ref REF [--intent T] [--scopes a,b] [--out FILE]");
-      const { aap } = await client(flags);
-      const { grant } = await aap.grants.sign({
-        delegation: str(flags, "delegation", true)!, challenge: await readJwtOrFile(str(flags, "challenge", true)!),
-        sessionRef: str(flags, "session-ref", true)!, intent: str(flags, "intent"), scopes: list(flags, "scopes"), ttlS: num(flags, "ttl-s"),
-      });
-      const o = str(flags, "out");
-      if (o) { await Bun.write(o, grant); out({ out: o, grant: decode(grant).claims }); } else out({ grant, claims: decode(grant).claims });
-      return 0;
-    }
-    case "present": {
-      const { aap } = await client(flags);
-      const header = await aap.presentations.build({ grant: await readJwtOrFile(str(flags, "grant", true)!), delegation: str(flags, "delegation", true)! });
-      const o = str(flags, "out");
-      if (o) { await Bun.write(o, header); out({ out: o, bytes: header.length }); } else console.log(`Foil-Agent-Grant: ${header}`);
-      return 0;
-    }
-    case "challenges": {
-      if (sub !== "verify") throw new UsageError("usage: aap challenges verify JWT|FILE");
-      const { aap } = await client(flags, { auth: false });
-      out(await verifyChallenge(await readJwtOrFile(rest[0] ?? str(flags, "jwt", true)!), await aap.rootKey()));
-      return 0;
-    }
-    case "verify-chain": {
-      const { aap } = await client(flags, { auth: str(flags, "delegation")?.startsWith("dl_") });
-      const v = str(flags, "delegation", true)!;
-      const root = await aap.rootKey();
-      if (v.startsWith("dl_")) {
-        const authed = (await client(flags)).aap;
-        const d: DelegationObject = await authed.delegations.retrieve(v);
-        const claims = await verifyDelegation(d.certificate, root);
-        const agent = await authed.agents.retrieve(d.agent);
-        const acct = await authed.account.retrieve();
-        const operator = acct.operator ? await verifyOperator(acct.operator.certificate, root) : null;
-        const agentClaims = operator ? await verifyAgent(agent.certificate, operator) : null;
-        out({ verified: true, delegation: claims, ...(agentClaims ? { agent: { id: agentClaims.sub, name: agentClaims.name, ceiling: agentClaims.ceiling }, operator: operator!.sub } : {}) });
-      } else {
-        out({ verified: true, delegation: await verifyDelegation(await readText(v), root) });
-      }
-      return 0;
     }
     case "inspect": {
       const jwt = await readJwtOrFile(sub ?? str(flags, "jwt", true)!);

@@ -11,6 +11,7 @@ import { paginate, present } from "../envelope.ts";
 import { pageQuery, str } from "../params.ts";
 import type { Ctx, Router } from "../router.ts";
 import { loadDelegation } from "./delegations.ts";
+import type { StoredAuthorization } from "../../lib/authorization.ts";
 
 function notFoundDelegation(id: string): never {
   throw notFound("delegation", id);
@@ -95,19 +96,23 @@ export async function submitAttestation(ctx: Ctx, delegationId: string, credenti
 }
 
 export function attestationRoutes(r: Router): void {
-  r.add("POST", "/v1/delegations/:id/attestations", async (ctx) =>
-    submitAttestation(ctx, ctx.params.id!, str(ctx.body, "credential", true)!));
+  r.add("POST", "/v1/authorizations/:id/attestations", async (ctx) => {
+    const a = await ctx.store.get<StoredAuthorization>("authorizations", ctx.params.id!);
+    if (!a?.delegation) throw notFound("authorization", ctx.params.id!);
+    return submitAttestation(ctx, a.delegation, str(ctx.body, "credential", true)!);
+  });
 
   r.add("GET", "/v1/attestations/:id", async (ctx) => load(ctx, ctx.params.id!));
 
   r.add("GET", "/v1/attestations", async (ctx) => {
     const q = ctx.query;
+    const authorization = q.get("authorization") ? await ctx.store.get<StoredAuthorization>("authorizations", q.get("authorization")!) : null;
     const all: Attestation[] = [];
     for (const a of await ctx.store.listAttestations()) {
       if (await canSee(ctx, a)) all.push(a);
     }
     const filtered = all.filter((a) =>
-      (!q.get("delegation") || a.delegation === q.get("delegation")) &&
+      (!q.get("authorization") || a.delegation === authorization?.delegation) &&
       (!q.get("origin") || a.origin === q.get("origin")!.toLowerCase()) &&
       (!q.get("issuer") || a.issuer === q.get("issuer")) &&
       (!q.get("status") || effectiveAttestationStatus(a) === q.get("status")),

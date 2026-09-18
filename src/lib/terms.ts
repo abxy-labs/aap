@@ -1,8 +1,9 @@
 import type { AgentClaims, PolicyClaims, TermsObject } from "../types.ts";
 import { formatAmount, intersectConstraints } from "./constraints.ts";
 import { invalid } from "./errors.ts";
-import { VOCABULARY, intersect, validate, withinTier } from "./scopes.ts";
+import { VOCABULARY, intersect, validate } from "./scopes.ts";
 import { Store, id, now } from "./store.ts";
+import {permittedScopes} from "./policy.ts";
 
 export const TERMS_TTL_S = 3600;
 
@@ -12,7 +13,7 @@ export type TermsBody = Omit<TermsObject, "id" | "object" | "created" | "livemod
 export function computeTerms(agent: AgentClaims, policy: PolicyClaims, requested: string[]): TermsBody {
   const unknown = validate(requested);
   if (unknown.length) throw invalid("unknown_scope", `Unknown scopes: ${unknown.join(", ")}.`, "scopes");
-  const scopes = withinTier(intersect(requested, agent.ceiling.scopes), policy.tier);
+  const scopes = permittedScopes(intersect(requested, agent.ceiling.scopes), policy);
   const constraints = intersectConstraints(agent.ceiling.constraints, policy.constraints);
   return {
     agent: agent.sub,

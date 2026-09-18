@@ -1,248 +1,95 @@
 # Command line reference
 
-`aap` is the command line for the Agent Admission Protocol. It is a thin client over the API: each resource is a command, each verb is a subcommand, and flags map to request fields. It also runs the reference API locally, signs the objects that never leave your machine, forwards webhooks to a development server, and tails request logs.
+The CLI is a local SDK client. It stores private signing keys in the chosen profile and signs authorization acceptance locally. Test commands are simulations and reject live keys.
 
-## Install
+## Start
 
-The reference implementation requires [Bun](https://bun.sh).
-
-```
+```bash
 bun install
-bun link          # makes `aap` available on your path
-aap --help
+bun run src/cli.ts serve
 ```
 
-Without `bun link`, replace `aap` with `bun run src/cli.ts` in every example.
+Use `bun run src/cli.ts` in place of `aap`, or link the package's bin locally. In another terminal:
 
-## Run the reference API
-
-```
-aap serve [--port 4010] [--store DIR]
-```
-
-Starts the API on `127.0.0.1:4010` over a store directory, `.aap` in the current directory by default. The store plays the part of Foil's database. It is created, with a root key, on first run. Keep this running in one terminal while you use the commands below in another.
-
-```
-aap demo [--keep]
+```bash
+aap --profile site accounts create --type site --name "Example Bank"
+aap --profile operator accounts create --type operator --name "Example Browser Co" --asn AS14618
 ```
 
-Runs the whole lifecycle against an in-process API and prints each step: onboarding, an agent, a policy, terms, a delegation with observed evidence, a challenge, a grant, verification, the site's view of the session, a handoff in approve mode completed by the consumer, a replayed grant, a revocation, and the events that were recorded. Nothing outside a temporary directory is touched.
+Each profile stores its API base, keys and account. Set `--api-base` explicitly for another service. `aap whoami` inspects the selected account. Never put live keys in documentation or shell history.
 
-## Site discovery
+## Core commands
 
-```sh
-aap discovery create --origin https://bank.example --api-base https://aap.example [--out aap.json]
+```bash
+aap --profile site policies create \
+  --origin bank.example --scopes accounts:read --max-age-days 1
+
+aap --profile operator agents create \
+  --name balance-assistant --scopes accounts:read
+
+aap --profile operator authorizations create \
+  --agent ag_FROM_REGISTRATION --origin bank.example \
+  --subject customer_8e3a1b7c29f4 --intent "Check my account balance" \
+  --scopes accounts:read
+
+aap --profile operator authorizations accept auth_FROM_CREATE \
+  --revision REVISION_FROM_CONSENT \
+  --data '{"acceptance":{"acknowledged":[],"viewed":[],"channel":"in_app","accepted_at":"2026-09-17T10:00:00Z"}}'
+
+aap --profile operator test browser connect \
+  --authorization auth_FROM_ACCEPTANCE --asn AS14618
+```
+
+IDs and revision above are placeholders for returned values. The deliberately minimal policy has no disclosures. Real institutions publish the documents and acknowledgement text they require, and applications record real views/acceptance and the actual timestamp. Never auto-consent from a task prompt.
+
+The connect result supplies the session ID. Production operators implement the SDK browser transport rather than running the test command.
+
+## Customer actions and revocation
+
+```bash
+aap --profile operator customer-actions create \
+  --session sess_FROM_CONNECTION --scope payments:initiate \
+  --data '{"context":{"amount":14210,"currency":"usd","payee":"Pacific Power","invoice":"PP-2026-0917"}}'
+
+aap --profile operator customer-actions wait ca_FROM_CREATE --timeout 5m
+aap --profile site customer-actions complete ca_FROM_CREATE \
+  --session sess_VERIFIED_HUMAN --data '{"result":{"confirmed":true}}'
+
+aap --profile operator authorizations revoke auth_FROM_ACCEPTANCE --by consumer
+```
+
+These actions require matching permitted scopes and institution policy; the read-only policy above intentionally cannot make payments. Only the institution may complete an action. It validates authoritative payment/application details and a separate human session first. Waiting returns success only for completed; timeout/cancel/expiry exits 2. Completion never executes the financial operation.
+
+## Resources and flags
+
+Run `aap --help` for all commands. Core resources are agents, policies, authorizations, sessions, customer-actions, events and webhook-endpoints. Discovery is public and unauthenticated.
+
+Use `--data '{...}'` for inline JSON, `--field value`, `--nested.field value`, and `@file.json` for JSON files. List-valued flags such as scopes accept commas. Global options include `--profile`, `--api-base`, `--api-key`, `--live`, `--api-version`, `--idempotency-key`, and `--expand`.
+
+Policy shortcuts include `--max-age-days`, explicit `--scopes`, constraints, and repeatable `--customer-action 'scope=payments:initiate,mode=approve,url=https://bank.example/confirm?action={id}'`. There are no tier, terms, delegation, grant-signing or handoff compatibility commands.
+
+## Optional evidence
+
+Use policy `--data` with `advanced.evidence` keyed by exact scope and `advanced.attestations` for accepted issuers/types/claims. The `--evidence accounts:read=attested` shortcut sets the same advanced map.
+
+`credentials subject --authorization ID` derives a pseudonymous subject. `credentials issue` signs a supported credential locally. `attestations create --authorization ID --credential FILE_OR_JWT` submits it; retrieve/list/revoke and issuer lookup are also supported. An issuer who cannot read the authorization receives the subject from the requester instead. See [advanced integration](advanced.md).
+
+## Run complete examples
+
+```bash
+bun run demo
+bun examples/attestations.ts
+```
+
+The examples create and remove isolated temporary stores. They demonstrate customer authorization and optional evidence without sending email, verifying real people, moving money, or opening accounts.
+
+Test helpers also create human sessions, simulate presentations, link/complete customer actions and trigger webhook events. They are testing tools, not production authentication or browser adapters. Use `listen --forward-to localhost:3000/webhooks` to inspect signed local deliveries.
+
+## Discovery
+
+```bash
+aap discovery create --origin https://bank.example --api-base https://aap.example --out aap-discovery.json
 aap discovery retrieve https://bank.example
-aap serve --discovery aap.json [--port 4010]
 ```
 
-`create` generates public metadata offline for a site to host at
-`/.well-known/aap`.
-not a requirement. `--out` refuses to overwrite an existing file. `retrieve`
-needs no login, sends no API key, and never changes your configured service or
-trusted keys. `serve --discovery` mounts a validated profile only for its exact
-configured request origin; without it, discovery is not published. Use
-`--allow-local` on each command only for loopback development over HTTP.
-See [Site discovery](discovery.md) for the complete two-terminal example,
-supported fields, cache behavior, and security requirements.
-
-## Accounts and profiles
-
-The command line keeps profiles in `~/.config/aap/config.json`, or under `AAP_CONFIG_DIR`. A profile holds the API base URL, a test key, a live key, and the paths of the signing keys it has generated. Commands use the current profile; `--profile NAME` selects another, and one machine typically has an `operator` profile and a `site` profile.
-
-```
-aap accounts create --type operator --name "Example Browser Co" [--asn AS14618,AS16509] [--attestations @kya.json] [--key operator.key.json]
-aap accounts create --type site --name "Example Bank"
-aap accounts create --type issuer --name "Identity Co" --url https://identity.example [--key issuer.key.json]
-```
-
-Onboarding against the reference server. Creating an operator account generates an operator signing key when `--key` is not given, uploads the public half, receives the operator certificate and both API keys, stores everything in the profile, and logs you in. In production these steps happen out of band and you receive keys from Foil.
-
-```
-aap login --api-key sk_test_… [--live-key sk_live_…] [--api-base URL] [--profile NAME]
-aap logout
-aap config
-aap whoami
-```
-
-`login` stores keys you were given. `config` prints the current profile with keys masked. `whoami` retrieves the account behind the current key.
-
-## Global flags
-
-| Flag | Meaning |
-| --- | --- |
-| `--api-key KEY` | Use this key instead of the profile's. `AAP_API_KEY` does the same. |
-| `--api-base URL` | Use this API instead of the profile's. `AAP_API_BASE` does the same. |
-| `--profile NAME` | Use another profile. |
-| `--live` | Use the profile's live key. |
-| `--expand a,b.c` | Expand referenced objects in the response. |
-| `--idempotency-key KEY` | Set the idempotency key on a create. One is generated when absent. |
-| `--api-version DATE` | Pin the API version. |
-| `-d '{"json": true}'` | Merge a JSON object into the request body. |
-
-Output is always JSON, pretty-printed. Commands exit 0 on success, 1 on an error, and 2 when a verification or wait ended in a state other than the one asked for.
-
-## Flag syntax
-
-Flags map to request fields. `--a.b VALUE` sets a nested field. `--items.0.k VALUE` builds a list of objects. `@file.json` reads a JSON value from a file. For fields that hold lists of strings, `a,b,c` is a list. `true`, `false`, and integers are converted; fields that hold ids or names are kept as strings.
-
-```
-aap handoffs create --session sess_9d02 --scope payments:initiate --context.amount 14210 --context.currency usd --context.payee "Pacific Power"
-aap policies create --origin bank.example --tier read --disclosures @bundle.json --handoffs.0.scope payments:initiate --handoffs.0.mode approve
-```
-
-## Resources
-
-Every resource supports `create`, `retrieve ID`, and `list`, plus the verbs shown. Arguments after the verb are the id; everything else is a flag.
-
-### agents
-
-```
-aap agents create --name NAME --scopes a,b [--currency usd] [--max-amount N] [--max-total N] [--max-count N] [--payees existing_only|any] [--key FILE] [--alg ES256|EdDSA] [--days N]
-aap agents retrieve ID
-aap agents list [--status active]
-aap agents update ID --metadata.team payments
-aap agents deactivate ID
-```
-
-`create` generates an agent key pair, signs the certificate with the profile's operator key, registers it, and stores the agent key under the profile. Later commands that sign for this agent find the key by the agent's id. Pass `--key` to use a key you already have.
-
-### policies
-
-```
-aap policies create --origin O --tier observe|read|manage|transact|none
-    [--allow-operators any|a,b] [--allow-agents any|a,b] [--deny-agents a,b]
-    [--currency usd] [--max-amount N] [--max-total N] [--max-count N] [--payees existing_only]
-    [--disclosures @bundle.json] [--evidence read=asserted,transact=observed]
-    [--handoff "scope=payments:initiate,mode=approve,url=https://bank.example/agent/confirm?aap_handoff={id}"]
-    [--max-age-days 30] [--disclose operator,agent] [--attestations @attestations.json] [--credentials @credentials.json]
-aap policies retrieve ID
-aap policies list [--origin O]
-```
-
-`--handoff` may be repeated, one per scope. `mode` is `approve` or `complete`, `url` is an https template with `{id}` and optionally `{code}`, and `expires_in` is in seconds.
-
-### attestations and issuers
-
-```
-aap attestations create --delegation ID --credential FILE|JWT
-aap attestations retrieve ID
-aap attestations list [--delegation ID] [--origin O] [--issuer URL] [--status active|revoked|expired]
-aap attestations revoke ID
-aap issuers retrieve ID | list
-```
-
-`create` submits a signed credential against a delegation. An operator submits for its own delegations; an issuer account submits against a delegation id it was given. An operator can also attach credentials when creating the delegation, with `--attestations` on `aap delegations create`.
-
-### terms
-
-```
-aap terms create --agent ID --origin O [--scopes a,b]
-aap terms retrieve ID
-```
-
-### delegations
-
-```
-aap delegations create --agent ID --origin O --subject S --terms ID --acceptance @acceptance.json [--scopes a,b] [--intent TEXT] [--site-session ID]
-aap delegations retrieve ID [--expand record,agent]
-aap delegations list [--agent ID] [--origin O] [--subject S] [--status active|revoked|expired]
-aap delegations revoke ID [--by consumer]
-```
-
-The acceptance file is what the application collected from the consumer:
-
-```json
-{ "terms": "trm_3f2a", "acknowledged": ["esign", "share"], "viewed": ["esign", "privacy"], "channel": "imessage", "accepted_at": "2026-09-01T14:03:40Z", "copies_sent_to": "email" }
-```
-
-The request is signed with the agent's key from the profile before it is sent.
-
-### sessions
-
-```
-aap sessions retrieve ID [--expand delegation.record]
-aap sessions list [--origin O] [--status active|requires_handoff|downgraded] [--plane human|agent|bot]
-```
-
-### handoffs
-
-```
-aap handoffs create --session ID --scope S [--context.amount N --context.currency usd --context.payee NAME] [--context.application REF]
-aap handoffs retrieve ID
-aap handoffs list [--session ID] [--origin O] [--status pending]
-aap handoffs update ID --url https://verify.vendor.example/i/abc        (site)
-aap handoffs complete ID [--session ID] [--result.outcome passed]        (site)
-aap handoffs cancel ID
-aap handoffs wait ID [--timeout 15m] [--interval 1s]
-```
-
-`wait` polls until the handoff is completed, canceled, or expired, prints it, and exits 0 only when it completed. Durations accept `s`, `m`, `h`, and `d`.
-
-### events and webhook endpoints
-
-```
-aap events retrieve ID
-aap events list [--type handoff.completed] [--limit 20]
-aap webhook-endpoints create --url URL [--enabled-events a,b] [--description TEXT]
-aap webhook-endpoints retrieve ID | list | update ID --status disabled | delete ID
-aap directory list
-```
-
-## Local signing
-
-These commands use keys from the profile and read from the API only to fetch objects by id. Nothing they produce is sent unless you send it.
-
-```
-aap credentials issue --issuer URL --type T (--subject URI | --delegation ID) --claims k=v,k=v --valid-for 30d --key FILE [--out FILE] [--context URL]
-aap credentials subject --delegation ID
-aap keys generate --out FILE [--alg ES256|EdDSA]
-aap keys list
-aap challenges verify JWT|FILE
-aap grants sign --delegation ID --challenge JWT|FILE --session-ref REF [--intent TEXT] [--scopes a,b] [--ttl-s N] [--out FILE]
-aap present --grant FILE|JWT --delegation ID [--out FILE]
-aap verify-chain --delegation ID|FILE
-aap inspect FILE|JWT
-```
-
-`credentials issue` signs a verifiable credential with a local key. Pass `--delegation` to fill the subject from a delegation, or `--subject` to write it yourself. `--claims` takes `name=value` pairs; `true`, `false`, and numbers are converted. `credentials subject` prints the subject an issuer names for a delegation.
-
-`grants sign` verifies the challenge against the root key first and refuses a challenge for a different origin than the delegation's. `present` writes the `Foil-Agent-Grant` header value with the full chain. `verify-chain` verifies a delegation certificate against the root key and, given an id, the agent and operator certificates above it. `inspect` decodes any signed object without verifying it.
-
-## Test mode
-
-```
-aap test agents list
-aap test sessions create --origin O [--human false] [--known-device] [--age 240] [--device mobile]
-aap test sessions use ID --scope S
-aap test challenges create --origin O [--out FILE]
-aap test presentations create --origin O (--header-file FILE | --agent ag_test_bound) [--session ID] [--asn A] [--ja4 J] [--scopes a,b]
-aap test handoffs link ID [--session ID]
-aap test handoffs complete ID [--outcome passed] [--result.reference chk_1]
-aap trigger EVENT_TYPE [--origin O]
-```
-
-These call the test helpers described in the [API reference](api.md#test-helpers) and require a test key. `test presentations create --agent` takes one of the fixed-outcome test agents, so a site can see every downgrade reason and the handoff flow without an operator.
-
-## Webhooks and logs
-
-```
-aap listen --forward-to localhost:3000/aap/webhooks [--events handoff.completed,delegation.revoked]
-```
-
-Registers a temporary webhook endpoint pointing at a local listener, prints its signing secret, and forwards every delivery to your application with the original `AAP-Signature` header so your verification code runs unchanged. The endpoint is removed when you quit.
-
-```
-aap trigger handoff.completed
-aap logs tail
-```
-
-`trigger` emits an event with a realistic fixture object, which is the quickest way to exercise a webhook handler. `logs tail` streams the reference server's request log: status, method, path, duration, account, mode, and request id.
-
-## A complete session from the shell
-
-[examples/lifecycle.sh](../examples/lifecycle.sh) starts a reference API, onboards an operator and a site as two profiles, and runs every command in order: an agent, a policy with a disclosure bundle and an approve-mode handoff, terms, a consumer session, a delegation, a challenge, a grant, a presentation, scope use, a handoff created by the agent and completed by the consumer while the operator waits on it, a replayed grant, a revocation, an event, a triggered webhook, and the directory. Run it with `bash examples/lifecycle.sh`.
-
-## What the reference implementation does not do
-
-It does not score sessions. The operator profile check compares network evidence passed on the command line with the operator certificate, standing in for the fingerprint and behavioral scoring Foil performs on live traffic. It does not retry failed webhook deliveries. It does not implement the planned edge challenge. Its account creation endpoint stands in for onboarding that happens out of band in production.
+Publish the document at the institution's `/.well-known/aap`. Discovery does not forward credentials or reconfigure API trust; see [discovery](discovery.md).

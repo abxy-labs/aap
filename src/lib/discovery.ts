@@ -10,8 +10,8 @@ export interface DiscoveryProfile {
   origin: string;
   api_version: typeof DISCOVERY_API_VERSION;
   api_base: string;
-  capabilities: ("delegations" | "handoffs")[];
-  endpoints: { terms: string; delegations: string; handoffs: string };
+  capabilities: ("authorizations" | "customer_actions")[];
+  endpoints: { authorizations: string; customer_actions: string };
   jwks_uri: string;
 }
 
@@ -46,9 +46,9 @@ export function createDiscoveryProfile(input: { origin: string; apiBase: string 
   return {
     object: "aap_discovery", version: DISCOVERY_VERSION, origin,
     api_version: DISCOVERY_API_VERSION, api_base: api,
-    capabilities: ["delegations", "handoffs"],
+    capabilities: ["authorizations", "customer_actions"],
     endpoints: {
-      terms: `${api}/v1/terms`, delegations: `${api}/v1/delegations`, handoffs: `${api}/v1/handoffs`,
+      authorizations: `${api}/v1/authorizations`, customer_actions: `${api}/v1/customer_actions`,
     },
     jwks_uri: `${api}/.well-known/foil-root`,
   };
@@ -62,9 +62,9 @@ export function validateDiscoveryProfile(value: unknown, expectedOrigin?: string
   const origin = discoveryOrigin(p.origin, opts);
   if (expectedOrigin && origin !== discoveryOrigin(expectedOrigin, opts)) throw new Error("Discovery origin does not match the site requested.");
   if (!Array.isArray(p.capabilities)
-    || p.capabilities.some(c => !["delegations", "handoffs"].includes(c))
+    || p.capabilities.some(c => !["authorizations", "customer_actions"].includes(c))
     || new Set(p.capabilities).size !== p.capabilities.length
-    || !p.capabilities.includes("delegations") || !p.capabilities.includes("handoffs")) {
+    || !p.capabilities.includes("authorizations") || !p.capabilities.includes("customer_actions")) {
     throw new Error("Unsupported AAP discovery capabilities.");
   }
   const profile = createDiscoveryProfile({ origin, apiBase: p.api_base as string }, opts);

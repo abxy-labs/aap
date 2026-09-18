@@ -5,11 +5,10 @@ import { Store, id, now } from "./store.ts";
 export const EVENT_TYPES = [
   "agent.created", "agent.deactivated",
   "policy.created",
-  "terms.created",
-  "delegation.created", "delegation.revoked", "delegation.expired",
+  "authorization.created", "authorization.accepted", "authorization.revoked",
   "attestation.created", "attestation.revoked",
   "session.bound", "session.downgraded", "session.scope_used",
-  "handoff.created", "handoff.completed", "handoff.canceled", "handoff.expired",
+  "customer_action.created", "customer_action.completed", "customer_action.canceled", "customer_action.expired",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -38,7 +37,7 @@ async function currentEventObject(store: Store, evt: EventObject): Promise<Recor
     : object === "terms" ? await store.getTerms(objectId)
     : object === "delegation" ? await store.getDelegation(objectId)
     : object === "session" ? await store.getSession(objectId)
-    : object === "handoff" ? await store.getHandoff(objectId)
+    : object === "customer_action" ? await store.getCustomerAction(objectId)
     : null;
   return record(current) ?? snapshot;
 }
@@ -80,6 +79,10 @@ export async function eventAccountIds(store: Store, evt: EventObject): Promise<S
 }
 
 export async function emitEvent(store: Store, type: EventType, object: unknown, request: { id?: string; idempotency_key?: string } = {}): Promise<EventObject> {
+  if (record(object)?.object === "customer_action") {
+    const { delegation, ...publicAction } = record(object)!;
+    object = publicAction;
+  }
   const evt: EventObject = {
     id: id("evt"),
     object: "event",

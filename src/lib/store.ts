@@ -2,7 +2,7 @@ import { mkdir, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { KeyFile } from "./keys.ts";
 import type {
-  Account, AgentObject, ApiKeyRecord, Attestation, DelegationRecord, EventObject, Handoff, IssuerObject,
+  Account, AgentObject, ApiKeyRecord, Attestation, DelegationRecord, EventObject, CustomerAction, IssuerObject,
   OperatorObject, PolicyObject, SessionRecord, StoredDelegation, TermsObject, WebhookEndpoint,
 } from "../types.ts";
 
@@ -208,10 +208,10 @@ export class Store {
   putGrantBinding(b: BoundGrant) { return this.put("grants", b.jti, b); }
   getGrantBinding(jti: string) { return this.get<BoundGrant>("grants", jti); }
 
-  // handoffs
-  putHandoff(h: Handoff) { return this.put("handoffs", h.id, h); }
-  getHandoff(id: string) { return this.get<Handoff>("handoffs", id); }
-  listHandoffs() { return this.list<Handoff>("handoffs"); }
+  // customer_actions
+  putCustomerAction(h: CustomerAction) { return this.put("customer_actions", h.id, h); }
+  getCustomerAction(id: string) { return this.get<CustomerAction>("customer_actions", id); }
+  listCustomerActions() { return this.list<CustomerAction>("customer_actions"); }
 
   // events and webhooks
   putEvent(e: EventObject) { return this.put("events", e.id, e); }

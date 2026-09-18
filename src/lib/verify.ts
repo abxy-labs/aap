@@ -1,13 +1,13 @@
-import type { AgentBlock, AgentClaims, DelegationClaims, DowngradeReason, DowngradedBlock, GrantClaims, HandoffConfig, OperatorClaims, SessionRecord } from "../types.ts";
+import type { AgentBlock, AgentClaims, DelegationClaims, DowngradeReason, DowngradedBlock, GrantClaims, CustomerActionConfig, OperatorClaims, SessionRecord } from "../types.ts";
 import { verifyAgent, verifyOperator } from "./certs.ts";
-import { attestedTiers, refreshDelegationEvidence, satisfiesAttested } from "./attestations.ts";
+import { attestedScopes, refreshDelegationEvidence, satisfiesAttested } from "./attestations.ts";
 import { intersectConstraints } from "./constraints.ts";
 import { delegationWithinCeiling, verifyDelegation } from "./delegation.ts";
 import { parseHeader } from "./grant.ts";
 import { TYP, decode, nowSeconds, verify } from "./jwt.ts";
 import type { KeyFile } from "./keys.ts";
-import { admitsAgents, agentAllowed, handoffFor, loadPolicy, operatorAllowed } from "./policy.ts";
-import { isSubset, maxTier, withinTier } from "./scopes.ts";
+import { admitsAgents, agentAllowed, customerActionsFor, loadPolicy, operatorAllowed, permittedScopes } from "./policy.ts";
+import { isSubset } from "./scopes.ts";
 import { Store, iso } from "./store.ts";
 
 export interface VerifyInput {
@@ -26,7 +26,7 @@ export interface VerifyResult {
   /** Granted scopes dropped because the site's current policy is tighter than when the delegation was created. */
   narrowed?: string[];
   /** Scopes in the grant that the consumer must complete on the site. */
-  handoffs?: Required<HandoffConfig>[];
+  customer_actions?: Required<CustomerActionConfig>[];
 }
 
 export class Downgrade extends Error {
@@ -120,23 +120,22 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
     if (!admitsAgents(policy)) throw new Downgrade("policy_denied", `${input.origin} does not admit agents`);
     if (!operatorAllowed(policy, operator.sub)) throw new Downgrade("policy_denied", `operator ${operator.sub} is not admitted`);
     if (!agentAllowed(policy, agent.sub)) throw new Downgrade("policy_denied", `agent ${agent.sub} is not admitted`);
-    const effective = withinTier(grant.scopes, policy.tier);
-    if (effective.length === 0) throw new Downgrade("policy_denied", `no granted scope is within the site's tier ceiling (${policy.tier})`);
+    const effective = permittedScopes(grant.scopes, policy);
+    if (effective.length === 0) throw new Downgrade("policy_denied", "No granted scope is allowed by the current policy.");
     const narrowed = grant.scopes.filter((s) => !effective.includes(s));
     const constraints = intersectConstraints(delegation.constraints, policy.constraints);
 
-    const top = maxTier(effective);
-    const required = top === "none" ? undefined : policy.evidence[top];
-    if (required === "observed" && !delegation.record.observed) {
-      throw new Downgrade("evidence_insufficient", `${top} tier requires an observed session link and the delegation has only asserted evidence`);
+    const required = effective.map(scope=>policy.evidence[scope]);
+    if (required.includes("observed") && !delegation.record.observed) {
+      throw new Downgrade("evidence_insufficient", `A requested scope requires an observed session link and the delegation has only asserted evidence`);
     }
-    if (required === "presented" && !delegation.record.presented) {
-      throw new Downgrade("evidence_insufficient", `${top} tier requires a holder-bound presentation and the delegation has none`);
+    if (required.includes("presented") && !delegation.record.presented) {
+      throw new Downgrade("evidence_insufficient", `A requested scope requires a holder-bound presentation and the delegation has none`);
     }
     const attested = await refreshDelegationEvidence(store, delegation.sub, nowSeconds(now));
-    for (const tier of attestedTiers(effective, policy)) {
+    for (const scope of attestedScopes(effective, policy)) {
       if (!(await satisfiesAttested(store, delegation.sub, policy, nowSeconds(now)))) {
-        throw new Downgrade("evidence_insufficient", `${tier} tier requires an attestation this site accepts and the delegation has none that is current`);
+        throw new Downgrade("evidence_insufficient", `${scope} requires an attestation this site accepts and the delegation has none that is current`);
       }
     }
 
@@ -156,7 +155,7 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
       }
     }
 
-    const handoffs = handoffFor(policy, effective);
+    const customer_actions = customerActionsFor(policy, effective);
     const existing = await store.getSession(input.sessionId);
     const block: AgentBlock = {
       ...(policy.disclose.agent ? { id: agent.sub, name: agent.name } : {}),
@@ -166,8 +165,8 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
       scopes: effective,
       scopes_used: existing?.agent && "scopes_used" in existing.agent ? existing.agent.scopes_used : [],
       constraints,
-      delegation: {
-        id: delegation.sub,
+      authorization: {
+        id: (await store.getDelegation(delegation.sub))?.metadata.authorization ?? delegation.sub,
         issuer: delegation.issuer ?? "foil",
         policy_version: delegation.policy_version,
         created_at: iso(delegation.iat),
@@ -182,7 +181,7 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
         attested,
         presented: delegation.record.presented ?? null,
       },
-      handoff: null,
+      customer_action: null,
       approvals: existing?.agent && "approvals" in existing.agent ? existing.agent.approvals : [],
     };
     const session: SessionRecord = {
@@ -205,7 +204,7 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
       statusHeader: "Foil-Agent-Status: bound",
       session,
       ...(narrowed.length ? { narrowed } : {}),
-      ...(handoffs.length ? { handoffs } : {}),
+      ...(customer_actions.length ? { customer_actions } : {}),
     };
   } catch (e) {
     if (!(e instanceof Downgrade)) throw e;
