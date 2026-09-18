@@ -8,7 +8,7 @@ The guide assumes you have read the [Key concepts](../spec.md#key-concepts) sect
 
 You need one of the following, depending on which kind of issuer you are.
 
-- **A provider** needs an issuer account with Foil, an https identifier such as `https://identity.example`, and a signing key whose public half is registered. Sites name your issuer id in their policy.
+- **A provider** needs an issuer account with Foil, an https identifier such as `https://identity.example`, and a signing key whose public half is registered. Your identifier is yours alone: registration refuses one another issuer already holds, and your attestations are tied to your account record rather than to the URL, so nobody who claims your identifier inherits anything. Sites name your issuer id in their policy.
 - **An application** needs nothing new. It signs with the agent key it already has, and a site that admits `operator` in its policy accepts credentials from the delegation's own operator and its agents.
 
 Sites decide what they accept. Being registered does not make a site accept you, and a credential is not a claim that the site should act on it.

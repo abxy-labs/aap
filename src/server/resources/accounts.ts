@@ -50,6 +50,11 @@ export function accountRoutes(r: Router): void {
       if (!Array.isArray(keyList) || !keyList.length || keyList.some((k) => !k || typeof k !== "object" || typeof k.kid !== "string" || !k.kid || "d" in k)) {
         throw invalid("parameter_invalid", "public_keys must be a list of public JWKs, each with a kid.", "public_keys");
       }
+      // Issuer accounts are authorized by their record id, but the URL is the identifier credentials
+      // name, so two accounts must never share one.
+      for (const existing of await store.listIssuers()) {
+        if (existing.url === url) throw invalid("issuer_url_taken", `The issuer identifier ${url} is already registered.`, "url");
+      }
       issuerId = id("iss");
       issuer = { id: issuerId, object: "issuer", created: now(), account: null, name, url, public_keys: keyList as (JsonWebKey & { kid: string })[], status: "active" };
     }

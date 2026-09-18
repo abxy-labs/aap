@@ -109,7 +109,10 @@ export interface Attestation extends ObjectBase {
   status: AttestationStatus;
   delegation: string;
   origin: string;
+  /** The issuer identifier the credential named: a registered issuer's URL, or the operator or agent id. */
   issuer: string;
+  /** The registered issuer whose key verified it, or null when the delegation's own operator or agent signed it. */
+  issuer_account: string | null;
   type: string;
   subject: string;
   claims: Record<string, string | number | boolean>;

@@ -29,19 +29,22 @@ export interface AcceptInput {
 }
 
 /** Resolve the keys a credential may be signed with, from the site's policy and the registry. */
-async function candidateKeys(store: Store, policy: AttestationPolicy, delegation: DelegationShape, operatorKey?: JWK & { kid: string }, agentKey?: JWK & { kid: string }): Promise<IssuerKey[]> {
-  const keys: IssuerKey[] = [];
+/** A candidate key, with the registered issuer it belongs to when one exists. */
+type Candidate = IssuerKey & { account: string | null };
+
+async function candidateKeys(store: Store, policy: AttestationPolicy, delegation: DelegationShape, operatorKey?: JWK & { kid: string }, agentKey?: JWK & { kid: string }): Promise<Candidate[]> {
+  const keys: Candidate[] = [];
   for (const name of policy.issuers) {
     // "operator" admits the delegation's own operator and the agent acting under it, which is how an
-    // application states a check it performed itself.
+    // application states a check it performed itself. Neither is a registered issuer account.
     if (name === "operator") {
-      if (operatorKey) keys.push({ issuer: delegation.operator, key: operatorKey });
-      if (agentKey) keys.push({ issuer: delegation.agent, key: agentKey });
+      if (operatorKey) keys.push({ issuer: delegation.operator, key: operatorKey, account: null });
+      if (agentKey) keys.push({ issuer: delegation.agent, key: agentKey, account: null });
       continue;
     }
     const issuer = await store.getIssuer(name);
     if (!issuer || issuer.status !== "active") continue;
-    for (const key of issuer.public_keys) keys.push({ issuer: issuer.url, key });
+    for (const key of issuer.public_keys) keys.push({ issuer: issuer.url, key, account: issuer.id });
   }
   return keys;
 }
@@ -59,9 +62,10 @@ export async function prepareAttestation(store: Store, input: AcceptInput): Prom
   if (!keys.length) throw invalid("no_trusted_issuer", "No issuer this site accepts has a registered key.", "credential");
 
   const vc = await verifyCredential(input.credential, keys, t);
-  if (input.issuerAccount) {
-    const account = await store.getIssuer(input.issuerAccount);
-    if (!account || account.url !== vc.issuer) throw invalid("issuer_mismatch", "The credential names a different issuer than the account submitting it.", "credential");
+  // The registered issuer whose key verified it. Null means the delegation's own operator or agent signed it.
+  const account = keys.find((k) => k.issuer === vc.issuer)?.account ?? null;
+  if (input.issuerAccount && input.issuerAccount !== account) {
+    throw invalid("issuer_mismatch", "The credential names a different issuer than the account submitting it.", "credential");
   }
   checkAgainstPolicy(vc, policy, delegationSubject(input.delegation), t);
 
@@ -71,6 +75,7 @@ export async function prepareAttestation(store: Store, input: AcceptInput): Prom
     delegation: input.delegation.id,
     origin: input.delegation.origin,
     issuer: vc.issuer,
+    issuer_account: account,
     type: vc.type,
     subject: vc.subject,
     claims: retainedClaims(vc, policy),
@@ -134,9 +139,12 @@ export async function refreshDelegationEvidence(store: Store, delegation: string
 async function issuerAccepted(store: Store, a: Attestation, p: AttestationPolicy, delegation: StoredDelegation | null): Promise<boolean> {
   for (const name of p.issuers) {
     if (name === "operator") {
-      if (delegation && (a.issuer === delegation.operator || a.issuer === delegation.agent)) return true;
+      // Only the delegation's own operator or agent, and never a registered issuer account.
+      if (a.issuer_account === null && delegation && (a.issuer === delegation.operator || a.issuer === delegation.agent)) return true;
       continue;
     }
+    // Match the registered issuer by id, so a URL another account later claims cannot satisfy a policy.
+    if (a.issuer_account !== name) continue;
     const issuer = await store.getIssuer(name);
     if (issuer && issuer.status === "active" && issuer.url === a.issuer) return true;
   }

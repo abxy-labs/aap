@@ -356,6 +356,7 @@ An attestation is a statement about the consumer, signed by an issuer, recorded 
   "delegation": "dl_1Qx8k2",
   "origin": "bank.example",
   "issuer": "https://identity.example",
+  "issuer_account": "iss_idv",
   "type": "EmailControlCredential",
   "subject": "urn:aap:subject:op_7a1d:usr_41b",
   "claims": { "email_verified": true },
@@ -396,7 +397,9 @@ GET  /v1/attestations?delegation=&origin=&issuer=&status=
 POST /v1/attestations/:id/revoke
 ```
 
-An attestation is visible to the three parties to it: the site whose origin it is at, the operator whose delegation it is on, and the issuer that signed it. No other account can read or list it.
+`issuer` is the identifier the credential named. `issuer_account` is the registered issuer whose key verified it, or null when the delegation's own operator or agent signed it.
+
+An attestation is visible to the three parties to it: the site whose origin it is at, the operator whose delegation it is on, and the issuer that signed it. No other account can read or list it. An issuer is matched on its record id rather than its URL, so registering the same URL grants nothing, and registration refuses a URL another issuer already holds with `issuer_url_taken`.
 
 The site and the issuer that signed it can revoke; an operator that merely passed a credential through cannot withdraw the issuer's statement. A revoked attestation stops satisfying a policy at the next session binding or scope use, as does one whose issuer the site has since removed from its policy.
 
@@ -578,7 +581,7 @@ Every change produces an event. Events can be listed, and they are delivered to 
 | `policy.created` | A site published a policy version. |
 | `terms.created` | Terms were created for an agent at an origin. |
 | `delegation.created`, `delegation.revoked`, `delegation.expired` | A delegation changed state. Expiry is noticed on the next read of the delegation. |
-| `attestation.created`, `attestation.revoked` | An attestation was accepted against a delegation, or stopped counting. Events carry the attestation object, which holds only policy-named claims. |
+| `attestation.created`, `attestation.revoked` | An attestation was accepted against a delegation, or stopped counting. Events carry the attestation object, which holds only policy-named claims, and reach both the site at that origin and the operator whose delegation it is on. |
 | `session.bound`, `session.downgraded`, `session.scope_used` | A presentation was verified, a session failed a check, or a bound session exercised a scope. |
 | `handoff.created`, `handoff.completed`, `handoff.canceled`, `handoff.expired` | A handoff changed state. |
 

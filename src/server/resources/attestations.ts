@@ -28,10 +28,8 @@ async function canSee(ctx: Ctx, a: Attestation): Promise<boolean> {
     const d = await ctx.store.getDelegation(a.delegation);
     return !!d && !!acct.operator && d.operator === acct.operator;
   }
-  if (acct.type === "issuer" && acct.issuer) {
-    const issuer = await ctx.store.getIssuer(acct.issuer);
-    return !!issuer && issuer.url === a.issuer;
-  }
+  // Matched on the registered issuer id, not the URL, so registering the same URL grants nothing.
+  if (acct.type === "issuer" && acct.issuer) return a.issuer_account === acct.issuer;
   return false;
 }
 
@@ -122,8 +120,7 @@ export function attestationRoutes(r: Router): void {
     const acct = ctx.principal!.account;
     // The site whose origin it is at, or the issuer that actually signed it. An operator that merely
     // passed a credential through cannot withdraw the issuer's statement.
-    const issuer = acct.type === "issuer" && acct.issuer ? await ctx.store.getIssuer(acct.issuer) : null;
-    const mine = ownsOrigin(ctx.principal!, a.origin) || (!!issuer && issuer.url === a.issuer);
+    const mine = ownsOrigin(ctx.principal!, a.origin) || (acct.type === "issuer" && !!acct.issuer && a.issuer_account === acct.issuer);
     if (!mine) throw forbidden("Only the site or the issuer that signed it can revoke an attestation.");
     if (a.status === "revoked") return a;
     a.status = "revoked";

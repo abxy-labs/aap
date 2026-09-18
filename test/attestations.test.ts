@@ -334,6 +334,56 @@ describe("inline attestations are all or nothing", () => {
   });
 });
 
+describe("issuer identity cannot be claimed by URL", () => {
+  test("a second account cannot register a provider's identifier", async () => {
+    const key = await generateKeyFile();
+    const err = await anon.accounts.create({ type: "issuer", name: "Impostor", url: PROVIDER, public_keys: [key.public] })
+      .then(() => null, (e) => e as AapError);
+    expect(err!.code).toBe("issuer_url_taken");
+    expect(err!.param).toBe("url");
+  });
+
+  test("an attestation records the registered issuer that verified it, and authorization uses that id", async () => {
+    const d = await makeDelegation();
+    const a = await provider.attestations.create(d.id, { credential: await providerCredential(d) });
+    expect(a.issuer).toBe(PROVIDER);
+    expect(a.issuer_account).toBe(PROVIDER_ID);
+
+    // An account registered under a different URL cannot read or revoke it, even if it later
+    // somehow presented the same URL: authorization is on the issuer record id.
+    const key = await generateKeyFile();
+    const rival = clientFor((await anon.accounts.create({ type: "issuer", name: "Elsewhere", url: "https://elsewhere.example", public_keys: [key.public] })).keys.test);
+    expect((await rival.attestations.retrieve(a.id).then(() => null, (e) => e as AapError))!.status).toBe(404);
+    expect((await rival.attestations.revoke(a.id).then(() => null, (e) => e as AapError))!.status).toBe(404);
+    expect((await site.attestations.retrieve(a.id)).status).toBe("active");
+
+    // Defense in depth: even if a duplicate URL existed despite the uniqueness check, holding it
+    // grants nothing, because authorization is on the issuer record id, not the URL.
+    const impostorAcct = await anon.accounts.create({ type: "issuer", name: "Impostor 2", url: "https://impostor.example", public_keys: [(await generateKeyFile()).public] });
+    const impostorRecord = (await store.getIssuer(impostorAcct.issuer!.id))!;
+    impostorRecord.url = PROVIDER;                 // the URL the real provider's attestations name
+    await store.putIssuer(impostorRecord);
+    const impostor = clientFor(impostorAcct.keys.test);
+    expect((await impostor.attestations.retrieve(a.id).then(() => null, (e) => e as AapError))!.status).toBe(404);
+    expect((await impostor.attestations.revoke(a.id).then(() => null, (e) => e as AapError))!.status).toBe(404);
+    expect((await site.attestations.retrieve(a.id)).status).toBe("active");
+
+    // An operator-signed attestation belongs to no issuer account.
+    const own = await operator.credentials.issueForDelegation(await makeDelegation(), {
+      issuer: agent.id, type: "EmailControlCredential", claims: { email_verified: true }, validUntil: new Date(Date.now() + 86_400_000),
+    });
+    const d2 = await makeDelegation();
+    const b = await operator.attestations.create(d2.id, {
+      credential: await operator.credentials.issueForDelegation(d2, {
+        issuer: agent.id, type: "EmailControlCredential", claims: { email_verified: true }, validUntil: new Date(Date.now() + 86_400_000),
+      }),
+    });
+    void own;
+    expect(b.issuer_account).toBeNull();
+    expect((await provider.attestations.retrieve(b.id).then(() => null, (e) => e as AapError))!.status).toBe(404);
+  });
+});
+
 describe("privacy and events", () => {
   test("no raw credential, unnamed claim, or personal value is stored or emitted", async () => {
     const d = await makeDelegation();
@@ -346,6 +396,10 @@ describe("privacy and events", () => {
     const events = await site.events.list({ type: "attestation.created", limit: 5 });
     expect(JSON.stringify(events)).not.toContain("someone@example.com");
     expect(events.data[0]!.type).toBe("attestation.created");
+    // The operator that holds the delegation is a party to the event, even though the attestation
+    // names only the delegation.
+    const operatorEvents = await operator.events.list({ type: "attestation.created", limit: 5 });
+    expect(operatorEvents.data.some((e) => (e.data.object as { id: string }).id === a.id)).toBe(true);
     await bind(d, "sess_priv");
     const block = (await site.sessions.retrieve("sess_priv")).agent as AgentBlock;
     expect(JSON.stringify(block)).not.toContain("someone@example.com");
