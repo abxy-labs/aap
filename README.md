@@ -1,40 +1,48 @@
 # Agent Admission Protocol
 
-AAP lets an AI agent act at a participating financial institution with explicit customer consent and institution-defined permissions.
+<img src="docs/images/aap-logo.svg" alt="Agent Admission Protocol logo" width="305" height="118">
 
-This is a draft reference implementation. There is one integration path, not a compatibility layer for earlier drafts:
+The Agent Admission Protocol (AAP) lets an automated agent identify itself to a participating site, lets the site state which agents it admits and what those agents may do, and lets a customer authorize an agent to act on their behalf. The protocol adds a third category between human and bot—the agent plane—so a site can admit the automation it has chosen to admit without loosening detection for anything else.
 
-1. The institution publishes explicit scopes, limits, disclosures, and customer-action requirements.
-2. The operator creates an authorization. The application shows its consent details to the customer.
-3. The operator records acceptance of that exact consent revision.
-4. One browser-connect operation verifies the challenge, signs locally, and presents the authorization.
-5. Customer-only steps use customer actions. Either party can withdraw access.
+Consent is collected in the customer's application or on the participating site. Authorization is presented through a verified, origin-bound exchange, not broadcast on every ordinary web request. Identity and risk attestations are optional; they provide evidence, not permission.
 
-Attestations are optional. Institutions can add signed identity or risk evidence without changing the basic flow.
+## Contents
 
-## Run it
+- [Protocol specification](docs/spec.md): the core concepts, roles, authorization lifecycle, consent rules, permissions, and security boundaries.
+- [API reference](docs/api.md): objects, endpoints, errors, pagination, events, webhooks, and test helpers.
+- [CLI reference](docs/cli.md): the command line reference for `aap`.
+- Integration guides, one per party:
+  - [Integrate a site](docs/guides/site.md), for a financial institution or other participating site.
+  - [Integrate a browser operator](docs/guides/operator.md), for a company that runs browsers for agents.
+  - [Integrate an agent application](docs/guides/agent-app.md), for the product a customer talks to.
+  - [Integrate an embedded provider](docs/guides/embedded-provider.md), for a component that runs inside other companies' flows.
+  - [Issue attestations](docs/guides/attestation-issuer.md), for an identity or risk provider, or an application stating a check it performed itself.
+- [Advanced integration](docs/advanced.md): optional evidence and cryptographic transport.
+- [examples/lifecycle.sh](examples/lifecycle.sh): a runnable reference lifecycle.
+- [examples/attestations.ts](examples/attestations.ts): credentials from identity providers and applications, end to end.
+
+## Quick start
+
+The reference implementation requires [Bun](https://bun.sh).
 
 ```bash
 bun install
 bun run demo
-bun test
-bun run typecheck
 ```
 
-The demo starts an isolated local API and removes its temporary data afterwards. Consent, human sessions, and financial activity are simulated. It does not open an account or make a payment.
+The demo runs the lifecycle against an isolated local API and prints each step. Consent, human sessions, and financial activity are simulated; no account is opened or payment made.
 
-## Integrate
+To explore the API yourself:
 
-- [Protocol](docs/spec.md)
-- [API](docs/api.md) and [CLI](docs/cli.md)
-- [Financial institutions](docs/guides/site.md)
-- [Agent applications](docs/guides/agent-app.md)
-- [Browser operators](docs/guides/operator.md)
-- [Identity and risk providers](docs/guides/attestation-issuer.md)
-- [Optional evidence and cryptographic transport](docs/advanced.md)
-- [Discovery](docs/discovery.md)
+```bash
+bun link
+aap serve                                                  # terminal 1
+aap accounts create --type operator --name "Your Company"  # terminal 2
+aap agents create --name my-agent --scopes accounts:read
+aap --help
+```
 
-## SDK
+## Using the SDK
 
 ```ts
 import { Aap } from "aap";
@@ -60,10 +68,48 @@ const session = await aap.browser(transport).connect({
 });
 ```
 
-The named integration inputs above are supplied by your application; this is not a standalone script. Run `bun run demo` for a complete runnable example.
+The example assumes a registered agent, local signing keys, a browser transport, and consent collected by your application. Run `bun run demo` for the complete runnable flow. Private keys stay local; the browser operator supplies the network adapter.
 
-Private keys stay local. A browser connection is not a universal browser launcher: the operator implements the network adapter. Discovery never automatically changes the configured API host or trust root.
+## Site discovery
 
-## Reference implementation boundaries
+A site can publish `/.well-known/aap` with its protocol version, API service, endpoints, and capabilities. Discovery locates the service; it does not authorize access or establish trust in an issuer.
 
-The JSON-file store, account onboarding, and test transports are for local evaluation. Production deployments need durable transactions, verified onboarding/origin ownership, authenticated customer-session binding, revocation enforcement, and their own financial execution controls. AAP coordinates permission; institutions remain responsible for identity decisions, transaction validation, and execution.
+```bash
+aap discovery create --origin https://bank.example --api-base https://aap.example --out aap.json
+aap discovery retrieve https://bank.example
+```
+
+Serve the generated file on the site's domain. See [Site discovery](docs/discovery.md) for the profile, SDK usage, and a local walkthrough. Discovery is optional and never automatically sends API credentials or changes the configured service or trust root.
+
+## Repository layout
+
+```text
+docs/spec.md          the specification
+docs/api.md           API reference
+docs/cli.md           command reference
+docs/guides/          integration guides per party
+docs/images/          diagrams and the logo
+src/cli.ts            command line entry point
+src/cli/              profiles, flag parsing, listen, demo
+src/sdk/              the client library
+src/server/           the reference API: router, auth, envelope, resources
+src/lib/              authorization, verification, customer actions, events, store
+src/types.ts          object and claim shapes
+test/                 protocol, SDK, and API tests
+examples/             lifecycle walkthrough and attestation examples
+```
+
+## Tests
+
+```bash
+bun test
+bun run typecheck
+```
+
+Covers authorization and consent, browser admission, revocation, customer actions, optional attestations, discovery, key interoperability, and API behavior including errors, idempotency, events, and webhook signatures.
+
+## Status
+
+This is a draft. Endpoint names, header names, and claim shapes may change before release.
+
+The file-backed store, account onboarding, and browser transports are for local evaluation. Production integrations need durable state, verified onboarding and origin ownership, trusted customer-session binding, and revocation enforcement. AAP coordinates permission; sites remain responsible for identity decisions and executing the underlying operations. See the [integration boundaries](docs/advanced.md) for more detail.
