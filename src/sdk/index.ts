@@ -1,6 +1,8 @@
 import type { JWK } from "jose";
 import { issueAgent, verifyOperator } from "../lib/certs.ts";
 import { verifyChallenge } from "../lib/challenge.ts";
+import { delegationSubject } from "../lib/attestations.ts";
+import { credentialBody, issueCredential, type CredentialBody } from "../lib/credentials.ts";
 import { discover, type DiscoveryOptions } from "../lib/discovery.ts";
 import { delegationSigningPayload, signRequest, verifyDelegation } from "../lib/delegation.ts";
 import { constructEvent } from "../lib/events.ts";
@@ -9,8 +11,8 @@ import { decode } from "../lib/jwt.ts";
 import { generateKeyFile, type Alg, type KeyFile } from "../lib/keys.ts";
 import { id as newId } from "../lib/store.ts";
 import type {
-  Acceptance, Account, AgentClaims, AgentObject, Ceiling, DelegationClaims, DelegationObject, EventObject, Handoff, OperatorObject,
-  PolicyObject, SessionRecord, TermsObject, WebhookEndpoint,
+  Acceptance, Account, AgentClaims, AgentObject, Attestation, Ceiling, DelegationClaims, DelegationObject, EventObject, Handoff, IssuerObject,
+  OperatorObject, PolicyObject, SessionRecord, TermsObject, WebhookEndpoint,
 } from "../types.ts";
 
 export const DEFAULT_API_BASE = "http://127.0.0.1:4010";
@@ -25,6 +27,7 @@ export interface ListResponse<T> {
 
 export interface Keyring {
   operator?: KeyFile;
+  issuer?: KeyFile;
   agents: Record<string, KeyFile>;
 }
 
@@ -65,6 +68,8 @@ export interface DelegationCreateParams {
   scopes?: string[];
   intent?: string;
   site_session?: string | null;
+  /** Credentials the operator already holds, accepted along with the delegation. */
+  attestations?: string[];
   metadata?: Record<string, string>;
 }
 
@@ -141,12 +146,17 @@ export class Aap {
   // ---------------------------------------------------------------- accounts
   readonly accounts = {
     /** Reference-server onboarding. For an operator, generates a signing key when none is given and keeps it in `keys.operator`. */
-    create: async (params: { type: "operator" | "site"; name: string; key?: KeyFile; alg?: Alg; vetting?: string; session_handling?: string; attestations?: unknown[]; asn?: string[]; ja4?: string[] }) => {
+    create: async (params: { type: Account["type"]; name: string; key?: KeyFile; alg?: Alg; vetting?: string; session_handling?: string; attestations?: unknown[]; asn?: string[]; ja4?: string[]; url?: string; public_keys?: unknown[] }) => {
       let key = params.key;
       if (params.type === "operator" && !key) key = await generateKeyFile(params.alg ?? "ES256");
-      if (key) this.keys.operator = key;
+      if (params.type === "issuer" && !key && !params.public_keys) key = await generateKeyFile(params.alg ?? "ES256");
+      if (key && params.type === "operator") this.keys.operator = key;
+      if (key && params.type === "issuer") this.keys.issuer = key;
       const { key: _k, alg: _a, ...rest } = params;
-      return this.post<{ account: Account; keys: { test: string; live: string }; operator?: OperatorObject }>("/v1/accounts", { ...rest, ...(key ? { public_key: key.public } : {}) });
+      const body: Params = { ...rest };
+      if (key && params.type === "issuer" && !params.public_keys) body.public_keys = [key.public];
+      else if (key && params.type === "operator") body.public_key = key.public;
+      return this.post<{ account: Account; keys: { test: string; live: string }; operator?: OperatorObject; issuer?: IssuerObject }>("/v1/accounts", body);
     },
   };
 
@@ -201,6 +211,38 @@ export class Aap {
     retrieve: (id: string, opts?: RequestOptions) => this.get<DelegationObject>(`/v1/delegations/${id}`, {}, opts),
     list: (params: Params = {}, opts?: RequestOptions) => this.get<ListResponse<DelegationObject>>("/v1/delegations", params, opts),
     revoke: (id: string, params: Params = {}) => this.post<DelegationObject>(`/v1/delegations/${id}/revoke`, params),
+  };
+
+  // ---------------------------------------------------------------- attestations
+  readonly attestations = {
+    /** Submit a credential against a delegation. An operator passes one through; an issuer posts its own. */
+    create: (delegation: string, params: { credential: string }, opts?: RequestOptions) => this.post<Attestation>(`/v1/delegations/${delegation}/attestations`, params, opts),
+    retrieve: (id: string) => this.get<Attestation>(`/v1/attestations/${id}`),
+    list: (params: Params = {}) => this.get<ListResponse<Attestation>>("/v1/attestations", params),
+    revoke: (id: string) => this.post<Attestation>(`/v1/attestations/${id}/revoke`),
+  };
+
+  readonly issuers = {
+    retrieve: (id: string) => this.get<IssuerObject>(`/v1/issuers/${id}`),
+    list: (params: Params = {}) => this.get<ListResponse<IssuerObject>>("/v1/issuers", params),
+  };
+
+  /** Sign credentials with a local key. Nothing is sent. */
+  readonly credentials = {
+    /** The subject an issuer names for a delegation. */
+    subject: (delegation: Pick<DelegationObject, "operator" | "subject">) => delegationSubject(delegation),
+    body: credentialBody,
+    issue: (body: CredentialBody, key?: KeyFile) => {
+      const signing = key ?? this.keys.issuer;
+      if (!signing) throw new AapError(0, "invalid_request_error", "issuer_key_missing", "No issuer signing key is configured. Pass one, or set keys.issuer.");
+      return issueCredential(body, signing);
+    },
+    /** Sign a credential for a delegation with the agent's own key, for checks the application performed itself. */
+    issueForDelegation: async (delegation: DelegationObject, input: { issuer: string; type: string; claims: Record<string, string | number | boolean>; validUntil: Date; context?: string[] }) => {
+      const key = this.keys.agents[delegation.agent];
+      if (!key) throw new AapError(0, "invalid_request_error", "agent_key_missing", `No signing key is configured for agent ${delegation.agent}.`);
+      return issueCredential(credentialBody({ ...input, subject: delegationSubject(delegation) }), key);
+    },
   };
 
   // ---------------------------------------------------------------- sessions
@@ -333,3 +375,6 @@ export type { KeyFile } from "../lib/keys.ts";
 export { discover, createDiscoveryProfile, validateDiscoveryProfile } from "../lib/discovery.ts";
 export type { DiscoveryProfile, DiscoveryOptions } from "../lib/discovery.ts";
 export { generateKeyFile, readKeyFile } from "../lib/keys.ts";
+export { credentialBody, issueCredential, VC_CONTEXT, SUBJECT_PREFIX } from "../lib/credentials.ts";
+export { delegationSubject } from "../lib/attestations.ts";
+export type { Attestation, AttestationPolicy, AttestedEvidence, IssuerObject } from "../types.ts";

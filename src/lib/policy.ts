@@ -1,5 +1,6 @@
-import type { Constraints, CredentialPolicy, DisclosureBundle, Evidence, HandoffConfig, HandoffMode, PolicyClaims, PolicyObject, Tier } from "../types.ts";
+import type { AttestationPolicy, Constraints, CredentialPolicy, DisclosureBundle, Evidence, HandoffConfig, HandoffMode, PolicyClaims, PolicyObject, Tier } from "../types.ts";
 import { validateConstraints } from "./constraints.ts";
+import { validateAttestationPolicy } from "./credentials.ts";
 import { invalid } from "./errors.ts";
 import { TYP, nowSeconds, sign, verify } from "./jwt.ts";
 import type { KeyFile } from "./keys.ts";
@@ -18,15 +19,17 @@ export interface PolicyInput {
   handoffs?: HandoffConfig[];
   maxAgeS?: number;
   disclose?: { operator: boolean; agent: boolean };
+  attestations?: AttestationPolicy | null;
   credentials?: CredentialPolicy | null;
   metadata?: Record<string, string>;
   now?: Date;
 }
 
-const EVIDENCE: Evidence[] = ["asserted", "observed", "presented", "site"];
+const EVIDENCE: Evidence[] = ["asserted", "observed", "attested", "presented", "site"];
 const MODES: HandoffMode[] = ["approve", "complete"];
 
 export async function setPolicy(store: Store, root: KeyFile, input: PolicyInput): Promise<PolicyObject> {
+  validateAttestationPolicy(input.attestations);
   if (input.tier !== "none" && !TIERS.includes(input.tier)) throw invalid("invalid_tier", `Unknown tier '${input.tier}'. Use observe, read, manage, transact, or none.`, "tier");
   if (input.tier === "control") throw invalid("invalid_tier", "The control tier cannot be a policy ceiling.", "tier");
   const constraints = input.constraints ?? {};
@@ -63,6 +66,7 @@ export async function setPolicy(store: Store, root: KeyFile, input: PolicyInput)
     handoffs,
     max_age_s: input.maxAgeS ?? 30 * 86400,
     disclose: input.disclose ?? { operator: false, agent: false },
+    attestations: input.attestations ?? null,
     credentials: input.credentials ?? null,
     iat: nowSeconds(input.now),
   };
@@ -83,6 +87,7 @@ export async function setPolicy(store: Store, root: KeyFile, input: PolicyInput)
     handoffs: claims.handoffs,
     max_age_s: claims.max_age_s,
     disclose: claims.disclose,
+    attestations: claims.attestations,
     credentials: claims.credentials,
     statement,
   };

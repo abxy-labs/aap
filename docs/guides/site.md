@@ -113,7 +113,8 @@ For each tier, choose what evidence a delegation must carry before a session may
 | --- | --- | --- |
 | `asserted` | The application's signed statement that the consumer accepted is sufficient | Read tier |
 | `observed` | Foil must hold an observed link to a live session for the same consumer at your site | Manage and transact |
-| `presented` | The delegation must carry a verified credential presentation from the consumer. Reserved; no presentation can be recorded in the current version | Onboarding, once available |
+| `attested` | The delegation must carry a current attestation from an issuer you accept | An identity check before onboarding, or a verified email before a payment |
+| `presented` | The delegation must carry a credential the consumer presented from their own wallet. Reserved | Onboarding, once available |
 | `site` | The step must be completed on your site by the consumer | Anything you would not delegate to an application |
 
 Handoffs are steps the consumer must complete on your site regardless of tier. Configure one per scope with a mode and the URL of the page on your site that hosts the step.
@@ -127,11 +128,28 @@ Handoffs are steps the consumer must complete on your site regardless of tier. C
 
 In `approve` mode the agent proposes an action with its details, the consumer approves it on your page, and the agent then performs it; the session carries an approval your server checks the submission against. This is the usual configuration for a first transact deployment: the agent prepares a payment and the consumer confirms it where your step-up controls already are. In `complete` mode the consumer performs the step on your page and the agent resumes afterward. Identity verification is always `complete`. `{id}` in the URL is replaced with the handoff id, so your page can retrieve the handoff and render what the agent proposed. Without a URL, the consumer is told to open your site and use a short code.
 
-## Step 7: Choose what is disclosed to you
+## Step 7: Decide whether you need attestations
+
+Some actions need more than the consumer's consent. Opening an account may need an identity check; a payment may need to know the consumer controls the email address on file. An attestation is a statement about the consumer signed by an issuer you accept, recorded against the delegation, and you require one by setting a tier's evidence to `attested`.
+
+```json
+"attestations": {
+  "issuers": ["iss_idv", "operator"],
+  "types": ["IdentityVerificationCredential", "EmailControlCredential"],
+  "claims": ["identity_verified"],
+  "max_age_s": 2592000
+}
+```
+
+`issuers` names the providers you accept by id, and `"operator"` accepts credentials signed by the delegation's own operator or its agents, which is how an agent application states a check it performed itself. Decide those separately: you may trust a specialist provider for an identity document and an application for an email round trip, and not the reverse. `claims` names the claims a credential must carry, and those are the only claims kept; everything else in the credential is discarded. `max_age_s` refuses a credential issued longer ago than that, even if it has not expired. Removing an issuer from the list stops its existing attestations from counting, at the next session binding or scope use.
+
+Configuring this requires nothing. Until a tier's evidence says `attested`, sessions bind exactly as before.
+
+## Step 8: Choose what is disclosed to you
 
 Decide whether the operator name and the agent name appear in your verification response. The plane, the scopes, the constraints, and the delegation record appear regardless. Most financial institutions enable both for their fraud team's benefit.
 
-## Step 8: Read the verification response
+## Step 9: Read the verification response
 
 When a session is on the agent plane, the verification response carries an `agent` block. Every field below is present on every response for an agent session, except the two names, which depend on Step 7.
 
@@ -176,6 +194,7 @@ When a session is on the agent plane, the verification response carries an `agen
 | `agent.intent` | The agent's stated purpose, for logging and for your fraud team. |
 | `agent.delegation.id` | The key for tracking totals and counts, and for revocation. |
 | `agent.delegation.observed` | Whether Foil holds a link to a live session for the same consumer, and how old it was. |
+| `agent.delegation.attested` | Attestations recorded against the delegation, newest first, with the issuer, the type, and the claims your policy named. |
 | `status` | `active`, `requires_handoff`, or `downgraded`. |
 | `next_action` | Set to the pending handoff when the session requires one. |
 | `agent.handoff` | The id of the pending handoff, when set. |
@@ -192,7 +211,7 @@ A session that presented a grant and failed a check arrives on the bot plane wit
 
 Treat it as you treat any bot verdict. The reason is for your logs; the operator receives the same reason on its own channel.
 
-## Step 9: Gate routes
+## Step 10: Gate routes
 
 On each request from a session on the agent plane, check that the route's scope is in `agent.scopes`, and for transact routes compare the amount and the payee against `agent.constraints`. A session on the human plane is not subject to the scope list. A session on the bot plane is refused as today.
 
@@ -219,7 +238,7 @@ return allow();
 
 Refuse control-tier routes for every agent session without consulting the list. The scope will never be present, and the check is cheaper than the lookup.
 
-## Step 10: Handle a handoff
+## Step 11: Handle a handoff
 
 When an agent asks to perform a handoff scope, or reaches one without asking, a handoff is created. The session's status becomes `requires_handoff`, `next_action` names the handoff, and the operator is told. Treat the agent's attempt as incomplete rather than as an error.
 
@@ -241,7 +260,7 @@ For identity verification the same page launches your vendor's flow after retrie
 
 Subscribe to `handoff.created` if you want to prepare anything before the consumer arrives, and to `handoff.completed` and `handoff.expired` for your own records.
 
-## Step 11: Revoke a delegation
+## Step 12: Revoke a delegation
 
 You can revoke any delegation at your origin. Every grant under it stops being honored at its next telemetry beat, and the operator is notified.
 
@@ -251,7 +270,7 @@ POST /v1/delegations/{id}/revoke
 
 Revoke when your fraud team sees activity it does not want to continue, when a customer asks you to, or when a customer closes an account. To stop an agent everywhere on your site rather than one delegation, add it to the deny list in your policy. To stop all agents, set the tier ceiling to none.
 
-## Step 12: Retain records
+## Step 13: Retain records
 
 The delegation record is the document your compliance team will want. Fetch it in full and store it in your own system.
 
@@ -266,6 +285,8 @@ The record contains the terms, the document hashes, the acknowledgements given, 
 **Read-only balances and history.** Tier ceiling read. Admit all vetted operators. Evidence for read: asserted. A disclosure bundle with your electronic records consent and privacy notice, presentation app. No constraints, no handoff scopes. This is the configuration to start with.
 
 **Bill pay with limits.** Tier ceiling transact. Constraints: `currency` usd, `max_amount` 20000, `max_count` 5, `payees` existing_only. Evidence for transact: observed. Handoff on `payments:initiate` in `approve` mode with the URL of your confirmation page. The agent can read accounts and prepare a payment, and the consumer confirms each payment on your site.
+
+**Read with a verified email.** Tier ceiling read. Evidence for read: `attested`. Accept `EmailControlCredential` from `operator` with `email_verified` required and a thirty-day `max_age_s`. The application verifies the email once and attaches its own credential when it creates the delegation, so you need no exchange with anyone.
 
 **Onboarding with identity verification.** Tier ceiling manage, admitting `application:write` and `identity:verify`. A handoff on `identity:verify` with the URL of your verification page and `expires_in` 86400. A disclosure bundle with the account agreement and electronic records consent, presentation site. The agent can fill the application, and the consumer verifies their identity and accepts the account agreement on your site.
 

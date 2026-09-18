@@ -53,6 +53,7 @@ The command line keeps profiles in `~/.config/aap/config.json`, or under `AAP_CO
 ```
 aap accounts create --type operator --name "Example Browser Co" [--asn AS14618,AS16509] [--attestations @kya.json] [--key operator.key.json]
 aap accounts create --type site --name "Example Bank"
+aap accounts create --type issuer --name "Identity Co" --url https://identity.example [--key issuer.key.json]
 ```
 
 Onboarding against the reference server. Creating an operator account generates an operator signing key when `--key` is not given, uploads the public half, receives the operator certificate and both API keys, stores everything in the profile, and logs you in. In production these steps happen out of band and you receive keys from Foil.
@@ -114,12 +115,24 @@ aap policies create --origin O --tier observe|read|manage|transact|none
     [--currency usd] [--max-amount N] [--max-total N] [--max-count N] [--payees existing_only]
     [--disclosures @bundle.json] [--evidence read=asserted,transact=observed]
     [--handoff "scope=payments:initiate,mode=approve,url=https://bank.example/agent/confirm?aap_handoff={id}"]
-    [--max-age-days 30] [--disclose operator,agent] [--credentials @credentials.json]
+    [--max-age-days 30] [--disclose operator,agent] [--attestations @attestations.json] [--credentials @credentials.json]
 aap policies retrieve ID
 aap policies list [--origin O]
 ```
 
 `--handoff` may be repeated, one per scope. `mode` is `approve` or `complete`, `url` is an https template with `{id}` and optionally `{code}`, and `expires_in` is in seconds.
+
+### attestations and issuers
+
+```
+aap attestations create --delegation ID --credential FILE|JWT
+aap attestations retrieve ID
+aap attestations list [--delegation ID] [--origin O] [--issuer URL] [--status active|revoked|expired]
+aap attestations revoke ID
+aap issuers retrieve ID | list
+```
+
+`create` submits a signed credential against a delegation. An operator submits for its own delegations; an issuer account submits against a delegation id it was given. An operator can also attach credentials when creating the delegation, with `--attestations` on `aap delegations create`.
 
 ### terms
 
@@ -164,7 +177,7 @@ aap handoffs cancel ID
 aap handoffs wait ID [--timeout 15m] [--interval 1s]
 ```
 
-`wait` polls until the handoff is completed, canceled, or expired, prints it, and exits 0 only when it completed. Durations accept `s`, `m`, and `h`.
+`wait` polls until the handoff is completed, canceled, or expired, prints it, and exits 0 only when it completed. Durations accept `s`, `m`, `h`, and `d`.
 
 ### events and webhook endpoints
 
@@ -181,6 +194,8 @@ aap directory list
 These commands use keys from the profile and read from the API only to fetch objects by id. Nothing they produce is sent unless you send it.
 
 ```
+aap credentials issue --issuer URL --type T (--subject URI | --delegation ID) --claims k=v,k=v --valid-for 30d --key FILE [--out FILE] [--context URL]
+aap credentials subject --delegation ID
 aap keys generate --out FILE [--alg ES256|EdDSA]
 aap keys list
 aap challenges verify JWT|FILE
@@ -189,6 +204,8 @@ aap present --grant FILE|JWT --delegation ID [--out FILE]
 aap verify-chain --delegation ID|FILE
 aap inspect FILE|JWT
 ```
+
+`credentials issue` signs a verifiable credential with a local key. Pass `--delegation` to fill the subject from a delegation, or `--subject` to write it yourself. `--claims` takes `name=value` pairs; `true`, `false`, and numbers are converted. `credentials subject` prints the subject an issuer names for a delegation.
 
 `grants sign` verifies the challenge against the root key first and refuses a challenge for a different origin than the delegation's. `present` writes the `Foil-Agent-Grant` header value with the full chain. `verify-chain` verifies a delegation certificate against the root key and, given an id, the agent and operator certificates above it. `inspect` decodes any signed object without verifying it.
 

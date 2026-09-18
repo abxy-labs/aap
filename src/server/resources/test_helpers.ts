@@ -36,7 +36,7 @@ function fixtureBlock(agentId: string, scopes: string[]): AgentBlock {
     scopes, scopes_used: [], constraints: { currency: "usd", max_amount: 20000, payees: "existing_only" },
     delegation: {
       id: "dl_test", issuer: "foil", policy_version: 0, created_at: iso(t - 600), expires_at: iso(t + 30 * 86400), record: "dr_test",
-      asserted: { terms: "trm_test", acknowledged: ["esign", "share"], channel: "test" }, observed: null, presented: null,
+      asserted: { terms: "trm_test", acknowledged: ["esign", "share"], channel: "test" }, observed: null, attested: [], presented: null,
     },
     handoff: null, approvals: [],
   };

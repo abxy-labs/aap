@@ -7,6 +7,7 @@ export const EVENT_TYPES = [
   "policy.created",
   "terms.created",
   "delegation.created", "delegation.revoked", "delegation.expired",
+  "attestation.created", "attestation.revoked",
   "session.bound", "session.downgraded", "session.scope_used",
   "handoff.created", "handoff.completed", "handoff.canceled", "handoff.expired",
 ] as const;
@@ -60,10 +61,21 @@ export async function eventAccountIds(store: Store, evt: EventObject): Promise<S
       if (typeof agent?.operator === "string") operators.add(agent.operator);
     }
   }
+  // An object that names only a delegation, such as an attestation, still concerns the operator that
+  // holds it and the site whose origin it is at.
+  let delegationOrigin: string | null = null;
+  for (const candidate of [object.delegation, snapshot.delegation]) {
+    if (typeof candidate !== "string") continue;
+    const d = await store.getDelegation(candidate);
+    if (!d) continue;
+    operators.add(d.operator);
+    delegationOrigin = d.origin;
+  }
+  const scopeOrigin = origin ?? delegationOrigin;
   const accounts = await store.listAccounts();
   return new Set(accounts.filter((account: Account) =>
     (account.type === "operator" && !!account.operator && operators.has(account.operator)) ||
-    (account.type === "site" && !!origin && account.origins.includes(origin)),
+    (account.type === "site" && !!scopeOrigin && account.origins.includes(scopeOrigin)),
   ).map((account) => account.id));
 }
 

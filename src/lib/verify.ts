@@ -1,5 +1,6 @@
 import type { AgentBlock, AgentClaims, DelegationClaims, DowngradeReason, DowngradedBlock, GrantClaims, HandoffConfig, OperatorClaims, SessionRecord } from "../types.ts";
 import { verifyAgent, verifyOperator } from "./certs.ts";
+import { attestedTiers, refreshDelegationEvidence, satisfiesAttested } from "./attestations.ts";
 import { intersectConstraints } from "./constraints.ts";
 import { delegationWithinCeiling, verifyDelegation } from "./delegation.ts";
 import { parseHeader } from "./grant.ts";
@@ -130,7 +131,13 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
       throw new Downgrade("evidence_insufficient", `${top} tier requires an observed session link and the delegation has only asserted evidence`);
     }
     if (required === "presented" && !delegation.record.presented) {
-      throw new Downgrade("evidence_insufficient", `${top} tier requires a presented credential and the delegation has none`);
+      throw new Downgrade("evidence_insufficient", `${top} tier requires a holder-bound presentation and the delegation has none`);
+    }
+    const attested = await refreshDelegationEvidence(store, delegation.sub, nowSeconds(now));
+    for (const tier of attestedTiers(effective, policy)) {
+      if (!(await satisfiesAttested(store, delegation.sub, policy, nowSeconds(now)))) {
+        throw new Downgrade("evidence_insufficient", `${tier} tier requires an attestation this site accepts and the delegation has none that is current`);
+      }
     }
 
     const bound = await store.getGrantBinding(grant.jti);
@@ -172,6 +179,7 @@ export async function verifyPresentation(store: Store, root: KeyFile, input: Ver
           channel: delegation.record.asserted.channel,
         },
         observed: delegation.record.observed,
+        attested,
         presented: delegation.record.presented ?? null,
       },
       handoff: null,

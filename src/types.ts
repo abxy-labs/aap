@@ -21,7 +21,7 @@ export interface OperatorProfile {
 }
 
 /** A credential about the operator issued by a third party, such as a card network's Know-Your-Agent credential. */
-export interface Attestation {
+export interface OperatorAttestation {
   type: string;
   issuer: string;
   ref?: string;
@@ -36,7 +36,7 @@ export interface OperatorClaims {
   key: JsonWebKey;
   vetting: string;
   session_handling: string;
-  attestations: Attestation[];
+  attestations: OperatorAttestation[];
   profile?: OperatorProfile;
   iat: number;
   nbf: number;
@@ -72,16 +72,72 @@ export interface DisclosureBundle {
   retain: "copy_required" | "none";
 }
 
-export type Evidence = "asserted" | "observed" | "presented" | "site";
+export type Evidence = "asserted" | "observed" | "attested" | "presented" | "site";
 
 export type DelegationIssuer = "foil" | "site" | "consumer";
 
+/** Which attestations a site accepts. `issuers` holds issuer ids, or "operator" for the delegation's own operator. */
+export interface AttestationPolicy {
+  issuers: string[];
+  types: string[];
+  claims: string[];
+  max_age_s?: number;
+}
+
+/** Retained for policies written before attestations. Reserved for holder-bound wallet presentations. */
 export interface CredentialPolicy {
   types: string[];
   issuers: string[];
   claims: string[];
 }
 
+export interface IssuerObject {
+  id: string;
+  object: "issuer";
+  created: number;
+  account: string | null;
+  name: string;
+  url: string;
+  public_keys: (JsonWebKey & { kid: string })[];
+  status: "active" | "deactivated";
+}
+
+export type AttestationStatus = "active" | "revoked" | "expired";
+
+export interface Attestation extends ObjectBase {
+  object: "attestation";
+  status: AttestationStatus;
+  delegation: string;
+  origin: string;
+  /** The issuer identifier the credential named: a registered issuer's URL, or the operator or agent id. */
+  issuer: string;
+  /** The registered issuer whose key verified it, or null when the delegation's own operator or agent signed it. */
+  issuer_account: string | null;
+  type: string;
+  subject: string;
+  claims: Record<string, string | number | boolean>;
+  issued_at: number;
+  valid_until: number;
+  verified_at: number;
+  submitted_by: "operator" | "issuer" | "site";
+  holder_bound: false;
+  revoked_at: number | null;
+  revoked_by: string | null;
+}
+
+/** The summary of an accepted attestation, as it appears in the delegation record and the session. */
+export interface AttestedEvidence {
+  attestation: string;
+  issuer: string;
+  type: string;
+  claims: Record<string, string | number | boolean>;
+  holder_bound: false;
+  issued_at: number;
+  valid_until: number;
+  verified_at: number;
+}
+
+/** Reserved for a holder-bound presentation from the consumer's own wallet. */
 export interface PresentedEvidence {
   type: string;
   issuer: string;
@@ -117,6 +173,7 @@ export interface PolicyClaims {
   handoffs: HandoffConfig[];
   max_age_s: number;
   disclose: { operator: boolean; agent: boolean };
+  attestations: AttestationPolicy | null;
   credentials: CredentialPolicy | null;
   iat: number;
 }
@@ -141,6 +198,7 @@ export interface PolicyObject extends ObjectBase {
   handoffs: HandoffConfig[];
   max_age_s: number;
   disclose: { operator: boolean; agent: boolean };
+  attestations: AttestationPolicy | null;
   credentials: CredentialPolicy | null;
   statement: string;
 }
@@ -164,7 +222,7 @@ export interface OperatorObject {
   name: string;
   vetting: string;
   session_handling: string;
-  attestations: Attestation[];
+  attestations: OperatorAttestation[];
   profile?: OperatorProfile;
   public_key: JsonWebKey;
   certificate: string;
@@ -214,6 +272,9 @@ export interface DelegationRecord {
     copies_sent_to?: string;
   };
   observed: ObservedEvidence | null;
+  /** Attestations accepted for this delegation, newest first. */
+  attested: AttestedEvidence[];
+  /** Reserved for holder-bound wallet presentations. Null until one is recorded. */
   presented: PresentedEvidence | null;
 }
 
@@ -321,6 +382,7 @@ export interface AgentBlock {
     record: string;
     asserted: { terms: string; acknowledged: string[]; channel: string };
     observed: ObservedEvidence | null;
+    attested: AttestedEvidence[];
     presented: PresentedEvidence | null;
   };
   handoff: string | null;
@@ -382,9 +444,10 @@ export interface Account {
   id: string;
   object: "account";
   created: number;
-  type: "operator" | "site";
+  type: "operator" | "site" | "issuer";
   name: string;
   operator: string | null;
+  issuer?: string | null;
   origins: string[];
 }
 

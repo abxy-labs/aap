@@ -1,4 +1,4 @@
-import type { CredentialPolicy, DisclosureBundle, Evidence, HandoffConfig, Tier } from "../../types.ts";
+import type { AttestationPolicy, CredentialPolicy, DisclosureBundle, Evidence, HandoffConfig, Tier } from "../../types.ts";
 import { forbidden, notFound } from "../../lib/errors.ts";
 import { emitEvent } from "../../lib/events.ts";
 import { setPolicy } from "../../lib/policy.ts";
@@ -34,6 +34,7 @@ export function policyRoutes(r: Router): void {
       handoffs: (body.handoffs as HandoffConfig[] | undefined) ?? [],
       maxAgeS: num(body, "max_age_s"),
       disclose: { operator: disclose.includes("operator"), agent: disclose.includes("agent") },
+      attestations: obj<AttestationPolicy>(body, "attestations") ?? null,
       credentials: obj<CredentialPolicy>(body, "credentials") ?? null,
       metadata: metadata(body),
     });

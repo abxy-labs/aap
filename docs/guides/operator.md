@@ -168,7 +168,7 @@ Foil-Agent-Handoff: completed; id=ho_4Kq2m
 | `downgraded; reason=agent_deactivated` | You deactivated the agent | Expected |
 | `downgraded; reason=grant_replayed` | The grant was presented by another session | Sign one grant per session; investigate if you did |
 | `downgraded; reason=operator_mismatch` | The session does not look like your infrastructure | Investigate the session; this may indicate a leaked agent key |
-| `downgraded; reason=evidence_insufficient` | The tier in use requires observed evidence and the delegation has only asserted evidence | Create the delegation while the consumer has a live session at the site, or narrow the grant to read |
+| `downgraded; reason=evidence_insufficient` | The tier in use requires evidence the delegation does not carry: an observed session link, or a current attestation | Create the delegation while the consumer has a live session at the site, attach an attestation, or narrow the grant |
 | `downgraded; reason=scope_violation` | The session exercised a scope outside its grant | Fix the agent; it acted outside what it declared |
 | `downgraded; reason=handoff_completed_by_agent` | A handoff was completed from the agent's own session | Fix the agent; only the consumer completes handoffs |
 
@@ -194,7 +194,23 @@ The handoff's `display.message` is plain language assembled by Foil, `url` is th
 
 Never complete a handoff from the agent's session, and never relay a code or a credential from the consumer to do so. A completion from the agent's session is refused, and the session is downgraded.
 
-## Step 9: Support session transfer
+## Step 9: Attach an attestation when the site needs one
+
+A site may require an attestation for some tiers: a statement about the consumer, signed by an issuer the site accepts. Its terms say so, in `evidence`, and a session without one is downgraded with `evidence_insufficient`.
+
+If your application performed the check itself, sign a credential with the agent's key and attach it when you create the delegation. Sites that accept this name `operator` among their issuers, which covers you and your agents.
+
+```ts
+const credential = await aap.credentials.issueForDelegation(delegation, {
+  issuer: agent.id, type: "EmailControlCredential",
+  claims: { email_verified: true }, validUntil: new Date(Date.now() + 30 * 86_400_000),
+});
+await aap.delegations.create({ …, attestations: [credential] });
+```
+
+If a provider performed it, you can pass through the credential they gave you the same way, or give them the delegation id and let them post it themselves. Either path produces the same attestation on the delegation, and you can list them with `aap.attestations.list({ delegation })`. See [Issue attestations](attestation-issuer.md) for the credential format.
+
+## Step 10: Support session transfer
 
 Many agents begin with the consumer signing in to a site on their own device, after which the session continues in your cloud browser. To a site this looks like cookie theft. The protocol turns it into evidence when the delegation was created while the consumer's session at the site was live and Foil could observe it.
 
@@ -202,7 +218,7 @@ To provide that link, your local component on the consumer's device reads the Fo
 
 A delegation created this way carries observed evidence, which is what sites require for manage and transact tiers. A delegation created without it carries asserted evidence only, which sites accept for read.
 
-## Step 10: Cache the directory
+## Step 11: Cache the directory
 
 The directory is an optional hashed list of origins whose policy admits agents.
 Hash origins with SHA-256 of the lowercase origin to check membership. It is a
@@ -218,7 +234,7 @@ Treat the cached directory as a hint that may become stale. A known domain's has
 can be tested by anyone with the list. The signed challenge, not the hash, is the
 proof required before the browser sends a grant to the configured Foil service.
 
-## Step 11: Handle expiry and revocation
+## Step 12: Handle expiry and revocation
 
 Track each delegation's `expires_at`. Before it passes, ask the consumer again through the application if the relationship is ongoing. A revoked delegation is reported as `delegation_revoked` on the next presentation and through the optional webhook. Remove revoked and expired delegations from your store so that no session attempts to present under them.
 

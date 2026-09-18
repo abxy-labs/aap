@@ -72,13 +72,14 @@ export function paramsFromFlags(flags: Record<string, FlagValue>, skip: Iterable
 
 export function parseDuration(v: string | undefined, fallbackS: number): number {
   if (v === undefined) return fallbackS;
-  const m = /^(\d+)(ms|s|m|h)?$/.exec(v.trim());
-  if (!m) throw new UsageError(`cannot parse duration '${v}' (use 30s, 15m, 2h)`);
+  const m = /^(\d+)(ms|s|m|h|d)?$/.exec(v.trim());
+  if (!m) throw new UsageError(`cannot parse duration '${v}' (use 30s, 15m, 2h, 30d)`);
   const n = Number(m[1]);
   switch (m[2]) {
     case "ms": return n / 1000;
     case "m": return n * 60;
     case "h": return n * 3600;
+    case "d": return n * 86400;
     default: return n;
   }
 }
