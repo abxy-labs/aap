@@ -20,9 +20,34 @@ await site.policies.create({
 
 Supply your real disclosures. Each document has an ID, title, URL, format, content digest, and link/full presentation requirement. Acknowledgements contain the exact statement the customer must accept.
 
-## Verify arriving sessions
+## Verify an incoming agent request
 
-Policy creation does not produce a session. Your browser verification integration supplies the arriving session ID. Retrieve it and check plane, status, scopes, constraints and `agent.authorization.id`. A sandbox can list sessions after the operator runs browser connect; do not choose the first list entry in production.
+The browser presents its signed grant on arrival. Your browser-verification integration checks that request and returns its session directly. No listing, polling, or choosing the newest session is required. Policy creation alone does not produce a session.
+
+The following handler illustrates the reference verifier boundary, using the existing internal `verifyPresentation` function. It is not a hosted API endpoint or a method on the public SDK. `store` and `root` are initialized by the reference verification server; `request` is the incoming browser request, and `browserSession` is the current connection context supplied by its transport, never an arbitrary query parameter. Keep the root private key inside the verification service, not in institution application code.
+
+```ts
+import { verifyPresentation } from "./src/lib/verify.ts";
+
+async function admitRequest(request: Request, browserSession: { id: string }) {
+  const header = request.headers.get("Foil-Agent-Grant");
+  if (!header) throw new Error("Missing agent grant");
+
+  const { session } = await verifyPresentation(store, root, {
+    header,
+    origin: "bank.example", // Configured institution origin, not an untrusted header.
+    sessionId: browserSession.id,
+  });
+
+  if (session.plane !== "agent" || session.decision.verdict !== "allow") {
+    throw new Error("Agent request denied");
+  }
+
+  return session;
+}
+```
+
+In production, the network adapter must bind this context to the actual browser connection and enforce verification on that path. The reference transport is a sandbox, not a deployable production gateway. Your institution application consumes the verified session from that trusted integration and checks status, scopes, constraints, and `agent.authorization.id` before proceeding. If it needs a fresh read later, call `site.sessions.retrieve(session.id)` using this returned ID. `sessions.list` is for inspection and administration, not discovering the request currently being handled.
 
 An allow verdict admits a browser session, not every requested financial operation. Validate the operation and current limits against your own records.
 

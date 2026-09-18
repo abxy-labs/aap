@@ -73,6 +73,8 @@ The reference equivalent is `aap.test.browser.connect({authorization, asn})`. It
 
 `GET /v1/sessions/:id` and `GET /v1/sessions` (origin, plane, status filters) return verified session state. An agent block includes `intent`, `scopes`, `constraints`, `authorization.id`, `approvals` and any pending customer action. An authorization ID comes from authorization creation; a session ID comes from browser verification. They are not interchangeable.
 
+Admission is request-driven: the browser-verification integration returns the current request's session directly. The institution does not poll the collection or select its first/newest entry to associate a request. Listing is an administrative inspection tool; subsequent reads use the returned session ID. See the [incoming-request example](guides/site.md#verify-an-incoming-agent-request) for the reference verifier boundary and production integration requirements.
+
 An institution must gate each business operation against current permissions and approval context, rather than treating a prior allow response as blanket permission.
 
 ## Customer actions
