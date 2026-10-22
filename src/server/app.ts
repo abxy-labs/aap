@@ -18,6 +18,14 @@ import { testHelperRoutes } from "./resources/test_helpers.ts";
 import { webhookRoutes } from "./resources/webhook_endpoints.ts";
 import { Router } from "./router.ts";
 
+// A loop, not /\/+$/: request paths are client input, and that regex backtracks
+// quadratically on a long run of "/" followed by another character.
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end--;
+  return value.slice(0, end);
+}
+
 export interface LogEntry {
   seq: number;
   id: string;
@@ -80,7 +88,7 @@ export async function createApp(baseStore: Store, opts: AppOptions = {}): Promis
     const started = performance.now();
     const requestId = id("req");
     const url = new URL(req.url);
-    const path = url.pathname.replace(/\/+$/, "") || "/";
+    const path = trimTrailingSlashes(url.pathname) || "/";
     let principal: Principal | null = null;
     let status = 200;
     let errorCode: string | undefined;
