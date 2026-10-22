@@ -38,6 +38,13 @@ import type {
 export const DEFAULT_API_BASE = "http://127.0.0.1:4010";
 export const API_VERSION = "2026-09-15";
 
+// A loop, not /\/+$/: that regex backtracks quadratically on long runs of "/".
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end--;
+  return value.slice(0, end);
+}
+
 export interface ListResponse<T> {
   object: "list";
   url: string;
@@ -111,11 +118,11 @@ export class Aap {
     public readonly apiKey: string | null,
     opts: AapOptions = {},
   ) {
-    this.apiBase = (
+    this.apiBase = trimTrailingSlashes(
       opts.apiBase ??
       process.env.AAP_API_BASE ??
-      DEFAULT_API_BASE
-    ).replace(/\/+$/, "");
+      DEFAULT_API_BASE,
+    );
     this.apiVersion = opts.apiVersion ?? API_VERSION;
     this.keys = { agents: {}, ...opts.keys };
     this.fetchImpl = opts.fetch ?? fetch;
